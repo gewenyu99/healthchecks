@@ -40,6 +40,7 @@ from django_stubs_ext import WithAnnotations
 from oncalendar import OnCalendar, OnCalendarError
 
 from hc.accounts.http import AuthenticatedHttpRequest
+from hc.analytics import capture
 from hc.accounts.models import Member, Profile, Project
 from hc.api.models import (
     DEFAULT_GRACE,
@@ -549,6 +550,7 @@ def add_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.save()
 
     check.assign_all_channels()
+    capture(request.user.id, "check_created", {"kind": check.kind, "has_schedule": bool(check.schedule)})
 
     url = reverse("hc-checks", args=[project.code])
     url += _get_referer_qs(request)  # Preserve selected tags and search
@@ -835,6 +837,7 @@ def pause(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     # After pausing a check we must check if all checks are up,
     # and Profile.next_nag_date needs to be cleared out:
     check.project.update_next_nag_dates()
+    capture(request.user.id, "check_paused", {})
 
     # Don't redirect after an AJAX request:
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
@@ -857,6 +860,7 @@ def resume(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.last_ping = None
     check.alert_after = None
     check.save()
+    capture(request.user.id, "check_resumed", {})
 
     return redirect("hc-details", code)
 

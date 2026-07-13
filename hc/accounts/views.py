@@ -28,6 +28,8 @@ from django.middleware import csrf
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import Resolver404, resolve, reverse
 from django.utils.timezone import now
+
+from hc.analytics import capture
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.debug import sensitive_post_parameters
 from django.views.decorators.http import require_POST
@@ -142,6 +144,7 @@ def _check_2fa(request: HttpRequest, user: User) -> HttpResponse:
         return redirect(path)
 
     auth_login(request, user)
+    capture(user.id, "user_logged_in", {"login_method": "password"})
     return _redirect_after_login(request)
 
 
@@ -243,6 +246,7 @@ def signup(request: HttpRequest) -> HttpResponse:
     response = render(request, "accounts/signup_result.html", ctx)
     if "form" not in ctx:
         _set_autologin_cookie(response)
+        capture(user.id, "user_signed_up", {"registration_method": "email"})
 
     return response
 
