@@ -38,6 +38,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django_stubs_ext import WithAnnotations
 from oncalendar import OnCalendar, OnCalendarError
+from posthog import capture, identify_context, new_context
 
 from hc.accounts.http import AuthenticatedHttpRequest
 from hc.accounts.models import Member, Profile, Project
@@ -71,6 +72,15 @@ STATUS_TEXT_TMPL = get_template("front/log_status_text.html")
 LAST_PING_TMPL = get_template("front/last_ping_cell.html")
 EVENTS_TMPL = get_template("front/details_events.html")
 DOWNTIMES_TMPL = get_template("front/details_downtimes.html")
+
+
+def _capture_front_event(user_id: int, event: str, properties: dict[str, object]) -> None:
+    if not settings.POSTHOG_PROJECT_TOKEN:
+        return
+
+    with new_context():
+        identify_context(str(user_id))
+        capture(event, properties=properties)
 
 
 def _tags_counts(checks: Iterable[Check]) -> tuple[list[tuple[str, str, str]], int]:
@@ -550,6 +560,16 @@ def add_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     check.assign_all_channels()
 
+    _capture_front_event(
+        request.user.id,
+        "check_created",
+        {
+            "project_code": str(project.code),
+            "kind": check.kind,
+            "has_tags": bool(check.tags),
+        },
+    )
+
     url = reverse("hc-checks", args=[project.code])
     url += _get_referer_qs(request)  # Preserve selected tags and search
     return redirect(url)
@@ -836,6 +856,16 @@ def pause(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     # and Profile.next_nag_date needs to be cleared out:
     check.project.update_next_nag_dates()
 
+    _capture_front_event(
+        request.user.id,
+        "check_paused",
+        {
+            "check_code": str(check.code),
+            "project_code": str(check.project.code),
+            "had_started_run": check.last_start is not None,
+        },
+    )
+
     # Don't redirect after an AJAX request:
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return HttpResponse()
@@ -857,6 +887,16 @@ def resume(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.last_ping = None
     check.alert_after = None
     check.save()
+
+    _capture_front_event(
+        request.user.id,
+        "check_resumed",
+        {
+            "check_code": str(check.code),
+            "project_code": str(check.project.code),
+            "kind": check.kind,
+        },
+    )
 
     return redirect("hc-details", code)
 
@@ -1314,6 +1354,16 @@ def send_test_notification(
         dummy_flip.old_status = "down"
         dummy_flip.new_status = "up"
         error = channel.notify(dummy_flip, is_test=True)
+
+    _capture_front_event(
+        request.user.id,
+        "notification_test_requested",
+        {
+            "project_code": str(channel.project.code),
+            "channel_kind": channel.kind,
+            "result": "error" if error else "sent",
+        },
+    )
 
     if error:
         messages.warning(request, f"Could not send a test notification. {error}.")

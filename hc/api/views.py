@@ -31,6 +31,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from oncalendar import OnCalendar, OnCalendarError
+from posthog import capture, identify_context, new_context
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 
@@ -47,6 +48,15 @@ from hc.lib.tz import all_timezones, legacy_timezones
 class BadChannelException(Exception):
     def __init__(self, message: str):
         self.message = message
+
+
+def _capture_api_event(project: Project, event: str, properties: dict[str, object]) -> None:
+    if not settings.POSTHOG_PROJECT_TOKEN:
+        return
+
+    with new_context():
+        identify_context(str(project.owner_id))
+        capture(event, properties=properties)
 
 
 def guess_kind(schedule: str) -> str:
@@ -235,6 +245,18 @@ def ping(
         rid = UUID(rid_str)
 
     check.ping(remote_addr, scheme, method, ua, body, action, rid, exitstatus)
+
+    _capture_api_event(
+        check.project,
+        "api_ping_received",
+        {
+            "check_code": str(check.code),
+            "action": action,
+            "method": method,
+            "has_rid": rid is not None,
+            "via_slug": False,
+        },
+    )
 
     response = HttpResponse("OK")
     if settings.PING_BODY_LIMIT is not None:
@@ -453,6 +475,18 @@ def create_check(request: ApiRequest) -> HttpResponse:
         _update(check, spec, request.v)
     except BadChannelException as e:
         return JsonResponse({"error": e.message}, status=400)
+
+    if created:
+        _capture_api_event(
+            request.project,
+            "api_check_created",
+            {
+                "check_code": str(check.code),
+                "kind": check.kind,
+                "api_version": request.v,
+                "has_tags": bool(check.tags),
+            },
+        )
 
     return JsonResponse(check.to_dict(v=request.v), status=201 if created else 200)
 

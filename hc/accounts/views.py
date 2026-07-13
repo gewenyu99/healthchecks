@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import pyotp
 import segno
+from posthog import capture, identify_context, new_context, tag
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import authenticate, update_session_auth_hash
@@ -125,6 +126,14 @@ def _redirect_after_login(request: HttpRequest) -> HttpResponse:
 def _check_2fa(request: HttpRequest, user: User) -> HttpResponse:
     have_keys = user.credentials.exists()
     profile = Profile.objects.for_user(user)
+    _capture_account_event(
+        user,
+        "user_logged_in",
+        {
+            "has_2fa": have_keys or bool(profile.totp),
+            "next_path": request.GET.get("next", ""),
+        },
+    )
     if have_keys or profile.totp:
         # We have verified user's password or token, and now must
         # verify their security key. We store the following in user's session:
@@ -156,6 +165,21 @@ def _set_autologin_cookie(response: HttpResponse) -> None:
         samesite="Lax",
         secure=bool(settings.SESSION_COOKIE_SECURE),
     )
+
+
+def _identify_user(user: User) -> None:
+    identify_context(str(user.pk))
+    if user.email:
+        tag("email", user.email)
+
+
+def _capture_account_event(user: User, event: str, properties: dict[str, object]) -> None:
+    if not settings.POSTHOG_PROJECT_TOKEN:
+        return
+
+    with new_context():
+        _identify_user(user)
+        capture(event, properties=properties)
 
 
 @sensitive_post_parameters()
@@ -242,6 +266,14 @@ def signup(request: HttpRequest) -> HttpResponse:
 
     response = render(request, "accounts/signup_result.html", ctx)
     if "form" not in ctx:
+        _capture_account_event(
+            user,
+            "user_signed_up",
+            {
+                "created_account": user.date_joined >= now() - td(minutes=1),
+                "has_project": user.project_set.exists(),
+            },
+        )
         _set_autologin_cookie(response)
 
     return response
@@ -355,6 +387,15 @@ def add_project(request: AuthenticatedHttpRequest) -> HttpResponse:
     project.name = form.cleaned_data["name"]
     project.save()
 
+    _capture_account_event(
+        request.user,
+        "project_created",
+        {
+            "project_name_length": len(project.name),
+            "is_first_project": request.user.project_set.count() == 1,
+        },
+    )
+
     return redirect("hc-checks", project.code)
 
 
@@ -430,6 +471,15 @@ def project(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
                     user = _make_user(email, with_project=False)
 
                 if project.invite(user, role=invite_form.cleaned_data["role"]):
+                    _capture_account_event(
+                        request.user,
+                        "project_member_invited",
+                        {
+                            "project_code": str(project.code),
+                            "role": invite_form.cleaned_data["role"],
+                            "invited_existing_user": User.objects.filter(email=email).exists(),
+                        },
+                    )
                     ctx["team_member_invited"] = email
                     ctx["team_status"] = "success"
                 else:
