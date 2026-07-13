@@ -39,6 +39,9 @@ from django.views.decorators.http import require_POST
 from django_stubs_ext import WithAnnotations
 from oncalendar import OnCalendar, OnCalendarError
 
+import posthog
+from posthog import identify_context
+
 from hc.accounts.http import AuthenticatedHttpRequest
 from hc.accounts.models import Member, Profile, Project
 from hc.api.models import (
@@ -550,6 +553,10 @@ def add_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     check.assign_all_channels()
 
+    with posthog.new_context():
+        identify_context(str(request.user.pk))
+        posthog.capture("check_created", properties={"check_kind": check.kind})
+
     url = reverse("hc-checks", args=[project.code])
     url += _get_referer_qs(request)  # Preserve selected tags and search
     return redirect(url)
@@ -868,6 +875,11 @@ def remove_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     project = check.project
     check.rename_and_delete()
+
+    with posthog.new_context():
+        identify_context(str(request.user.pk))
+        posthog.capture("check_deleted", properties={"project_id": str(project.pk)})
+
     return redirect("hc-checks", project.code)
 
 
@@ -1318,6 +1330,9 @@ def send_test_notification(
     if error:
         messages.warning(request, f"Could not send a test notification. {error}.")
     else:
+        with posthog.new_context():
+            identify_context(str(request.user.pk))
+            posthog.capture("notification_test_sent", properties={"channel_kind": channel.kind})
         messages.success(request, "Test notification sent!")
 
     return redirect("hc-channels", channel.project.code)

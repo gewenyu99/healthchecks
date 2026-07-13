@@ -32,6 +32,9 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.debug import sensitive_post_parameters
 from django.views.decorators.http import require_POST
 
+import posthog
+from posthog import identify_context
+
 from hc.accounts import forms
 from hc.accounts.decorators import require_sudo_mode
 from hc.accounts.http import AuthenticatedHttpRequest
@@ -142,6 +145,9 @@ def _check_2fa(request: HttpRequest, user: User) -> HttpResponse:
         return redirect(path)
 
     auth_login(request, user)
+    with posthog.new_context():
+        identify_context(str(user.pk))
+        posthog.capture("user_logged_in", properties={"login_method": "password"})
     return _redirect_after_login(request)
 
 
@@ -180,6 +186,10 @@ def login(request: HttpRequest) -> HttpResponse:
                     profile = Profile.objects.for_user(magic_form.user)
                     profile.send_instant_login_link(redirect_url=redirect_url)
 
+                with posthog.new_context():
+                    identify_context(str(magic_form.user.pk)) if magic_form.user else None
+                    posthog.capture("login_link_requested", properties={"login_method": "magic_link"})
+
                 response = redirect("hc-login-link-sent")
                 _set_autologin_cookie(response)
                 return response
@@ -203,6 +213,10 @@ def login(request: HttpRequest) -> HttpResponse:
 
 @require_POST
 def logout(request: HttpRequest) -> HttpResponse:
+    if request.user.is_authenticated:
+        with posthog.new_context():
+            identify_context(str(request.user.pk))
+            posthog.capture("user_logged_out")
     auth_logout(request)
     return redirect("hc-index")
 
@@ -239,6 +253,11 @@ def signup(request: HttpRequest) -> HttpResponse:
         profile.send_instant_login_link()
     else:
         ctx = {"form": form}
+
+    if "form" not in ctx:
+        with posthog.new_context():
+            identify_context(str(user.pk))
+            posthog.capture("user_signed_up", properties={"created_new_account": user.username == str(user.pk)})
 
     response = render(request, "accounts/signup_result.html", ctx)
     if "form" not in ctx:

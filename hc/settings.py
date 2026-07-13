@@ -14,6 +14,7 @@ from typing import Any, overload
 from urllib.parse import urlparse
 
 import django_stubs_ext
+import posthog
 from django.http.request import split_domain_port
 
 django_stubs_ext.monkeypatch()
@@ -88,7 +89,7 @@ with (BASE_DIR / "CHANGELOG.md").open(encoding="utf-8") as f:
 
 
 INSTALLED_APPS = (
-    "hc.accounts",
+    "hc.accounts.apps.AccountsConfig",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -145,7 +146,14 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "hc.accounts.middleware.TeamAccessMiddleware",
+    "posthog.integrations.django.PosthogContextMiddleware",
 ]
+
+POSTHOG_PROJECT_TOKEN = os.getenv("POSTHOG_PROJECT_TOKEN")
+POSTHOG_HOST = os.getenv("POSTHOG_HOST")
+posthog.api_key = POSTHOG_PROJECT_TOKEN
+posthog.host = POSTHOG_HOST
+posthog.enable_exception_autocapture = True
 
 if envbool("USE_GZIP_MIDDLEWARE", "False"):
     MIDDLEWARE.append("django.middleware.gzip.GZipMiddleware")
