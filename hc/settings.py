@@ -97,7 +97,7 @@ INSTALLED_APPS = (
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "compressor",
-    "hc.api",
+    "hc.api.apps.ApiConfig",
     "hc.front",
     "hc.logs",
     "hc.payments",
@@ -145,10 +145,14 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "hc.accounts.middleware.TeamAccessMiddleware",
+    "posthog.integrations.django.PosthogContextMiddleware",
 ]
 
 if envbool("USE_GZIP_MIDDLEWARE", "False"):
     MIDDLEWARE.append("django.middleware.gzip.GZipMiddleware")
+
+POSTHOG_PROJECT_TOKEN = os.getenv("POSTHOG_PROJECT_TOKEN")
+POSTHOG_HOST = os.getenv("POSTHOG_HOST")
 
 AUTHENTICATION_BACKENDS = [
     "hc.accounts.backends.EmailBackend",

@@ -41,6 +41,7 @@ from oncalendar import OnCalendar, OnCalendarError
 
 from hc.accounts.http import AuthenticatedHttpRequest
 from hc.accounts.models import Member, Profile, Project
+from hc.api.apps import capture_event
 from hc.api.models import (
     DEFAULT_GRACE,
     DEFAULT_TIMEOUT,
@@ -550,6 +551,12 @@ def add_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     check.assign_all_channels()
 
+    capture_event(
+        str(request.user.id),
+        "check_created",
+        {"check_kind": check.kind, "has_schedule": bool(check.schedule)},
+    )
+
     url = reverse("hc-checks", args=[project.code])
     url += _get_referer_qs(request)  # Preserve selected tags and search
     return redirect(url)
@@ -567,6 +574,11 @@ def update_name(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
         check.tags = form.cleaned_data["tags"]
         check.desc = form.cleaned_data["desc"]
         check.save()
+        capture_event(
+            str(request.user.id),
+            "check_updated",
+            {"has_description": bool(check.desc), "has_tags": bool(check.tags)},
+        )
 
     if "/details/" in request.headers.get("Referer", ""):
         return redirect("hc-details", code)
@@ -835,6 +847,7 @@ def pause(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     # After pausing a check we must check if all checks are up,
     # and Profile.next_nag_date needs to be cleared out:
     check.project.update_next_nag_dates()
+    capture_event(str(request.user.id), "check_paused")
 
     # Don't redirect after an AJAX request:
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
@@ -857,6 +870,7 @@ def resume(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.last_ping = None
     check.alert_after = None
     check.save()
+    capture_event(str(request.user.id), "check_resumed")
 
     return redirect("hc-details", code)
 
@@ -868,6 +882,7 @@ def remove_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     project = check.project
     check.rename_and_delete()
+    capture_event(str(request.user.id), "check_deleted")
     return redirect("hc-checks", project.code)
 
 

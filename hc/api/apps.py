@@ -1,17 +1,40 @@
 from __future__ import annotations
 
+import atexit
 from collections.abc import Sequence
 from typing import Any
 from urllib.parse import urlsplit
 
+import posthog
 from django.apps import AppConfig
 from django.conf import settings
 from django.core.checks import Error, Warning, register
 from django.http.request import split_domain_port, validate_host
 
 
+posthog_client: posthog.Posthog | None = None
+
+
+def capture_event(
+    distinct_id: str, event: str, properties: dict[str, object] | None = None
+) -> None:
+    if posthog_client is not None:
+        posthog_client.capture(
+            distinct_id=distinct_id, event=event, properties=properties
+        )
+
+
 class ApiConfig(AppConfig):
     name = "hc.api"
+
+    def ready(self) -> None:
+        global posthog_client
+        posthog_client = posthog.Posthog(
+            settings.POSTHOG_PROJECT_TOKEN,
+            host=settings.POSTHOG_HOST,
+            enable_exception_autocapture=True,
+        )
+        atexit.register(posthog_client.shutdown)
 
 
 @register()  # W001, W002, W005, E002, E003

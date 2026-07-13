@@ -98,6 +98,8 @@ To set up Healthchecks development environment:
   pip install -r healthchecks/requirements.txt -r healthchecks/requirements-dev.txt
   ```
 
+  PostHog analytics uses `POSTHOG_PROJECT_TOKEN` and `POSTHOG_HOST` environment variables.
+
 * macOS only - pycurl needs to be reinstalled using the following method (assumes OpenSSL was installed using brew):
 
   ```sh

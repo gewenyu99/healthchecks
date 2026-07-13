@@ -36,6 +36,7 @@ from hc.accounts import forms
 from hc.accounts.decorators import require_sudo_mode
 from hc.accounts.http import AuthenticatedHttpRequest
 from hc.accounts.models import Credential, Member, Profile, Project
+from hc.api.apps import capture_event
 from hc.api.models import Channel, Check, TokenBucket
 from hc.lib.tz import all_timezones
 from hc.lib.webauthn import CreateHelper, GetHelper
@@ -142,6 +143,11 @@ def _check_2fa(request: HttpRequest, user: User) -> HttpResponse:
         return redirect(path)
 
     auth_login(request, user)
+    capture_event(
+        str(user.id),
+        "user_logged_in",
+        {"login_method": "password_or_magic_link"},
+    )
     return _redirect_after_login(request)
 
 
@@ -223,6 +229,7 @@ def signup(request: HttpRequest) -> HttpResponse:
     form = forms.SignupForm(request)
     if form.is_valid():
         email = form.cleaned_data["identity"]
+        is_new_user = False
         try:
             user = User.objects.get(email=email)
             # Sometimes existing users forget they already have an account.
@@ -234,9 +241,15 @@ def signup(request: HttpRequest) -> HttpResponse:
             # If the user does not exist, create a new user account.
             tz = form.cleaned_data["tz"]
             user = _make_user(email, tz)
-
+            is_new_user = True
         profile = Profile.objects.for_user(user)
         profile.send_instant_login_link()
+        if is_new_user:
+            capture_event(
+                str(user.id),
+                "user_signed_up",
+                {"registration_method": "magic_link"},
+            )
     else:
         ctx = {"form": form}
 
@@ -355,6 +368,12 @@ def add_project(request: AuthenticatedHttpRequest) -> HttpResponse:
     project.name = form.cleaned_data["name"]
     project.save()
 
+    capture_event(
+        str(request.user.id),
+        "project_created",
+        {"has_custom_name": bool(project.name)},
+    )
+
     return redirect("hc-checks", project.code)
 
 
@@ -430,6 +449,11 @@ def project(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
                     user = _make_user(email, with_project=False)
 
                 if project.invite(user, role=invite_form.cleaned_data["role"]):
+                    capture_event(
+                        str(request.user.id),
+                        "team_member_invited",
+                        {"role": invite_form.cleaned_data["role"]},
+                    )
                     ctx["team_member_invited"] = email
                     ctx["team_status"] = "success"
                 else:
@@ -569,6 +593,14 @@ def notifications(request: AuthenticatedHttpRequest) -> HttpResponse:
                     profile.next_nag_date = None
 
             profile.save()
+            capture_event(
+                str(request.user.id),
+                "notification_settings_updated",
+                {
+                    "reports": profile.reports,
+                    "nag_period_seconds": int(profile.nag_period.total_seconds()),
+                },
+            )
             ctx["status"] = "info"
 
     return render(request, "accounts/notifications.html", ctx)
