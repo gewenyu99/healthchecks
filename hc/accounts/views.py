@@ -36,6 +36,7 @@ from hc.accounts import forms
 from hc.accounts.decorators import require_sudo_mode
 from hc.accounts.http import AuthenticatedHttpRequest
 from hc.accounts.models import Credential, Member, Profile, Project
+from hc.api.apps import posthog_client
 from hc.api.models import Channel, Check, TokenBucket
 from hc.lib.tz import all_timezones
 from hc.lib.webauthn import CreateHelper, GetHelper
@@ -142,6 +143,11 @@ def _check_2fa(request: HttpRequest, user: User) -> HttpResponse:
         return redirect(path)
 
     auth_login(request, user)
+    posthog_client.capture(
+        distinct_id=str(user.pk),
+        event="user_logged_in",
+        properties={"login_method": "password_or_magic_link"},
+    )
     return _redirect_after_login(request)
 
 
@@ -203,6 +209,11 @@ def login(request: HttpRequest) -> HttpResponse:
 
 @require_POST
 def logout(request: HttpRequest) -> HttpResponse:
+    if request.user.is_authenticated:
+        posthog_client.capture(
+            distinct_id=str(request.user.pk),
+            event="user_logged_out",
+        )
     auth_logout(request)
     return redirect("hc-index")
 
@@ -234,6 +245,11 @@ def signup(request: HttpRequest) -> HttpResponse:
             # If the user does not exist, create a new user account.
             tz = form.cleaned_data["tz"]
             user = _make_user(email, tz)
+            posthog_client.capture(
+                distinct_id=str(user.pk),
+                event="user_signed_up",
+                properties={"initial_project_created": True},
+            )
 
         profile = Profile.objects.for_user(user)
         profile.send_instant_login_link()
@@ -355,6 +371,10 @@ def add_project(request: AuthenticatedHttpRequest) -> HttpResponse:
     project.name = form.cleaned_data["name"]
     project.save()
 
+    posthog_client.capture(
+        distinct_id=str(request.user.pk),
+        event="project_created",
+    )
     return redirect("hc-checks", project.code)
 
 
@@ -862,6 +882,11 @@ def login_webauthn(request: HttpRequest) -> HttpResponse:
         request.session.pop("state")
         request.session.pop("2fa_user")
         auth_login(request, user, "hc.accounts.backends.EmailBackend")
+        posthog_client.capture(
+            distinct_id=str(user.pk),
+            event="user_logged_in",
+            properties={"login_method": "webauthn"},
+        )
         return _redirect_after_login(request)
 
     options, request.session["state"] = helper.prepare()
@@ -916,6 +941,11 @@ def login_totp(request: HttpRequest) -> HttpResponse:
 
             request.session.pop("2fa_user")
             auth_login(request, user, "hc.accounts.backends.EmailBackend")
+            posthog_client.capture(
+                distinct_id=str(user.pk),
+                event="user_logged_in",
+                properties={"login_method": "totp"},
+            )
             return _redirect_after_login(request)
     else:
         form = forms.TotpForm(totp)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 from collections.abc import Sequence
 from typing import Any
 from urllib.parse import urlsplit
@@ -8,10 +9,23 @@ from django.apps import AppConfig
 from django.conf import settings
 from django.core.checks import Error, Warning, register
 from django.http.request import split_domain_port, validate_host
+from posthog import Posthog
+
+posthog_client: Posthog
 
 
 class ApiConfig(AppConfig):
     name = "hc.api"
+
+    def ready(self) -> None:
+        global posthog_client
+
+        posthog_client = Posthog(
+            api_key=settings.POSTHOG_PROJECT_TOKEN,
+            host=settings.POSTHOG_HOST,
+            enable_exception_autocapture=True,
+        )
+        atexit.register(posthog_client.shutdown)
 
 
 @register()  # W001, W002, W005, E002, E003
