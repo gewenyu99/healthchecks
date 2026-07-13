@@ -36,6 +36,7 @@ from hc.accounts import forms
 from hc.accounts.decorators import require_sudo_mode
 from hc.accounts.http import AuthenticatedHttpRequest
 from hc.accounts.models import Credential, Member, Profile, Project
+from hc.api.analytics import capture_event, set_person_properties
 from hc.api.models import Channel, Check, TokenBucket
 from hc.lib.tz import all_timezones
 from hc.lib.webauthn import CreateHelper, GetHelper
@@ -142,6 +143,13 @@ def _check_2fa(request: HttpRequest, user: User) -> HttpResponse:
         return redirect(path)
 
     auth_login(request, user)
+    user_id = str(user.pk)
+    set_person_properties(user_id, {"email": user.email})
+    capture_event(
+        user_id,
+        "user_logged_in",
+        {"authentication_method": "password_or_link"},
+    )
     return _redirect_after_login(request)
 
 
@@ -203,6 +211,8 @@ def login(request: HttpRequest) -> HttpResponse:
 
 @require_POST
 def logout(request: HttpRequest) -> HttpResponse:
+    if request.user.is_authenticated:
+        capture_event(str(request.user.pk), "user_logged_out", {})
     auth_logout(request)
     return redirect("hc-index")
 

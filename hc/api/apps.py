@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 from collections.abc import Sequence
 from typing import Any
 from urllib.parse import urlsplit
@@ -12,6 +13,19 @@ from django.http.request import split_domain_port, validate_host
 
 class ApiConfig(AppConfig):
     name = "hc.api"
+
+    def ready(self) -> None:
+        from posthog import Posthog
+
+        from hc.api import analytics
+
+        client = Posthog(
+            api_key=settings.POSTHOG_PROJECT_TOKEN,
+            host=settings.POSTHOG_HOST,
+            enable_exception_autocapture=True,
+        )
+        analytics.set_client(client)
+        atexit.register(client.shutdown)
 
 
 @register()  # W001, W002, W005, E002, E003

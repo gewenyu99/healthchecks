@@ -41,6 +41,7 @@ from oncalendar import OnCalendar, OnCalendarError
 
 from hc.accounts.http import AuthenticatedHttpRequest
 from hc.accounts.models import Member, Profile, Project
+from hc.api.analytics import capture_event
 from hc.api.models import (
     DEFAULT_GRACE,
     DEFAULT_TIMEOUT,
@@ -549,6 +550,11 @@ def add_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.save()
 
     check.assign_all_channels()
+    capture_event(
+        str(request.user.pk),
+        "check_created",
+        {"check_kind": check.kind, "has_tags": bool(check.tags)},
+    )
 
     url = reverse("hc-checks", args=[project.code])
     url += _get_referer_qs(request)  # Preserve selected tags and search
@@ -835,6 +841,7 @@ def pause(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     # After pausing a check we must check if all checks are up,
     # and Profile.next_nag_date needs to be cleared out:
     check.project.update_next_nag_dates()
+    capture_event(str(request.user.pk), "check_paused", {"check_kind": check.kind})
 
     # Don't redirect after an AJAX request:
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
@@ -857,6 +864,7 @@ def resume(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.last_ping = None
     check.alert_after = None
     check.save()
+    capture_event(str(request.user.pk), "check_resumed", {"check_kind": check.kind})
 
     return redirect("hc-details", code)
 
@@ -867,6 +875,7 @@ def remove_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check = _get_rw_check_for_user(request, code)
 
     project = check.project
+    capture_event(str(request.user.pk), "check_removed", {"check_kind": check.kind})
     check.rename_and_delete()
     return redirect("hc-checks", project.code)
 
@@ -1314,6 +1323,12 @@ def send_test_notification(
         dummy_flip.old_status = "down"
         dummy_flip.new_status = "up"
         error = channel.notify(dummy_flip, is_test=True)
+
+    capture_event(
+        str(request.user.pk),
+        "test_notification_sent",
+        {"channel_kind": channel.kind, "delivery_succeeded": not bool(error)},
+    )
 
     if error:
         messages.warning(request, f"Could not send a test notification. {error}.")
