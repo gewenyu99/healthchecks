@@ -37,6 +37,7 @@ from hc.accounts.decorators import require_sudo_mode
 from hc.accounts.http import AuthenticatedHttpRequest
 from hc.accounts.models import Credential, Member, Profile, Project
 from hc.api.models import Channel, Check, TokenBucket
+from hc.front.apps import FrontConfig
 from hc.lib.tz import all_timezones
 from hc.lib.webauthn import CreateHelper, GetHelper
 from hc.payments.models import Subscription
@@ -107,6 +108,19 @@ def _make_user(email: str, tz: str | None = None, with_project: bool = True) -> 
     return user
 
 
+def _track_authenticated_user(user: User, login_method: str) -> None:
+    client = FrontConfig.get_posthog_client()
+    client.set(
+        distinct_id=str(user.pk),
+        properties={"email": user.email, "is_staff": user.is_staff},
+    )
+    client.capture(
+        event="user_logged_in",
+        distinct_id=str(user.pk),
+        properties={"login_method": login_method},
+    )
+
+
 def _redirect_after_login(request: HttpRequest) -> HttpResponse:
     """Redirect to the URL indicated in ?next= query parameter."""
 
@@ -142,6 +156,7 @@ def _check_2fa(request: HttpRequest, user: User) -> HttpResponse:
         return redirect(path)
 
     auth_login(request, user)
+    _track_authenticated_user(user, "password_or_magic_link")
     return _redirect_after_login(request)
 
 
@@ -234,6 +249,16 @@ def signup(request: HttpRequest) -> HttpResponse:
             # If the user does not exist, create a new user account.
             tz = form.cleaned_data["tz"]
             user = _make_user(email, tz)
+            client = FrontConfig.get_posthog_client()
+            client.set(
+                distinct_id=str(user.pk),
+                properties={"email": user.email},
+            )
+            client.capture(
+                event="user_signed_up",
+                distinct_id=str(user.pk),
+                properties={"default_check_created": True},
+            )
 
         profile = Profile.objects.for_user(user)
         profile.send_instant_login_link()
@@ -354,6 +379,11 @@ def add_project(request: AuthenticatedHttpRequest) -> HttpResponse:
     project.code = project.badge_key = str(uuid4())
     project.name = form.cleaned_data["name"]
     project.save()
+    FrontConfig.get_posthog_client().capture(
+        event="project_created",
+        distinct_id=str(request.user.pk),
+        properties={},
+    )
 
     return redirect("hc-checks", project.code)
 
@@ -862,6 +892,7 @@ def login_webauthn(request: HttpRequest) -> HttpResponse:
         request.session.pop("state")
         request.session.pop("2fa_user")
         auth_login(request, user, "hc.accounts.backends.EmailBackend")
+        _track_authenticated_user(user, "webauthn")
         return _redirect_after_login(request)
 
     options, request.session["state"] = helper.prepare()
@@ -916,6 +947,7 @@ def login_totp(request: HttpRequest) -> HttpResponse:
 
             request.session.pop("2fa_user")
             auth_login(request, user, "hc.accounts.backends.EmailBackend")
+            _track_authenticated_user(user, "totp")
             return _redirect_after_login(request)
     else:
         form = forms.TotpForm(totp)

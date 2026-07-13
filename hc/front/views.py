@@ -52,6 +52,7 @@ from hc.api.models import (
     prepare_durations,
 )
 from hc.front import forms
+from hc.front.apps import FrontConfig
 from hc.front.templatetags.hc_extras import (
     down_title,
     num_down_title,
@@ -549,6 +550,11 @@ def add_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.save()
 
     check.assign_all_channels()
+    FrontConfig.get_posthog_client().capture(
+        event="check_created",
+        distinct_id=str(request.user.pk),
+        properties={"check_kind": check.kind, "has_tags": bool(check.tags)},
+    )
 
     url = reverse("hc-checks", args=[project.code])
     url += _get_referer_qs(request)  # Preserve selected tags and search
@@ -835,6 +841,11 @@ def pause(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     # After pausing a check we must check if all checks are up,
     # and Profile.next_nag_date needs to be cleared out:
     check.project.update_next_nag_dates()
+    FrontConfig.get_posthog_client().capture(
+        event="check_paused",
+        distinct_id=str(request.user.pk),
+        properties={"check_kind": check.kind},
+    )
 
     # Don't redirect after an AJAX request:
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
@@ -857,6 +868,11 @@ def resume(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.last_ping = None
     check.alert_after = None
     check.save()
+    FrontConfig.get_posthog_client().capture(
+        event="check_resumed",
+        distinct_id=str(request.user.pk),
+        properties={"check_kind": check.kind},
+    )
 
     return redirect("hc-details", code)
 
@@ -867,7 +883,13 @@ def remove_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check = _get_rw_check_for_user(request, code)
 
     project = check.project
+    check_kind = check.kind
     check.rename_and_delete()
+    FrontConfig.get_posthog_client().capture(
+        event="check_deleted",
+        distinct_id=str(request.user.pk),
+        properties={"check_kind": check_kind},
+    )
     return redirect("hc-checks", project.code)
 
 
@@ -1099,6 +1121,11 @@ def copy(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     copied.save()
 
     copied.channel_set.add(*check.channel_set.all())
+    FrontConfig.get_posthog_client().capture(
+        event="check_copied",
+        distinct_id=str(request.user.pk),
+        properties={"check_kind": copied.kind},
+    )
 
     url = reverse("hc-details", args=[copied.code], query={"copied": 1})
     return redirect(url)
@@ -1318,6 +1345,11 @@ def send_test_notification(
     if error:
         messages.warning(request, f"Could not send a test notification. {error}.")
     else:
+        FrontConfig.get_posthog_client().capture(
+            event="notification_test_sent",
+            distinct_id=str(request.user.pk),
+            properties={"channel_kind": channel.kind},
+        )
         messages.success(request, "Test notification sent!")
 
     return redirect("hc-channels", channel.project.code)

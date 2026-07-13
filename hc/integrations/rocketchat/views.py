@@ -8,6 +8,7 @@ from django.shortcuts import redirect, render
 from hc.accounts.http import AuthenticatedHttpRequest
 from hc.api.models import Channel
 from hc.front import forms
+from hc.front.apps import FrontConfig
 from hc.front.decorators import require_setting
 from hc.front.views import _get_rw_project_for_user
 
@@ -28,6 +29,11 @@ def add(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
             channel = Channel(project=project, kind="rocketchat")
             channel.value = form.cleaned_data["value"]
             channel.save()
+            FrontConfig.get_posthog_client().capture(
+                event="channel_created",
+                distinct_id=str(request.user.pk),
+                properties={"channel_kind": channel.kind},
+            )
 
             channel.assign_all_checks()
             return redirect("hc-channels", project.code)

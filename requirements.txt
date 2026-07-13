@@ -10,6 +10,7 @@ pycurl==7.46.0
 pydantic==2.13.4
 PyJWT[crypto]==2.13.0
 pyotp==2.10.0
+posthog~=7.22
 segno==1.6.6
 statsd==4.0.1
 whitenoise==6.12.0
