@@ -41,6 +41,9 @@ from hc.lib.tz import all_timezones
 from hc.lib.webauthn import CreateHelper, GetHelper
 from hc.payments.models import Subscription
 
+import posthog
+from posthog import new_context, identify_context, tag, capture
+
 logger = logging.getLogger(__name__)
 
 POST_LOGIN_ROUTES = (
@@ -234,6 +237,10 @@ def signup(request: HttpRequest) -> HttpResponse:
             # If the user does not exist, create a new user account.
             tz = form.cleaned_data["tz"]
             user = _make_user(email, tz)
+            with new_context():
+                identify_context(str(user.id))
+                tag("tz", tz or "")
+                capture("user_signed_up")
 
         profile = Profile.objects.for_user(user)
         profile.send_instant_login_link()
@@ -278,6 +285,10 @@ def check_token(
 
         user.profile.token = ""
         user.profile.save()
+        with new_context():
+            identify_context(str(user.id))
+            tag("email", user.email)
+            capture("user_logged_in", properties={"login_method": "magic_link"})
         return _check_2fa(request, user)
 
     request.session["bad_link"] = True
@@ -354,6 +365,10 @@ def add_project(request: AuthenticatedHttpRequest) -> HttpResponse:
     project.code = project.badge_key = str(uuid4())
     project.name = form.cleaned_data["name"]
     project.save()
+
+    with new_context():
+        identify_context(str(request.user.id))
+        capture("project_created")
 
     return redirect("hc-checks", project.code)
 
@@ -432,6 +447,11 @@ def project(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
                 if project.invite(user, role=invite_form.cleaned_data["role"]):
                     ctx["team_member_invited"] = email
                     ctx["team_status"] = "success"
+                    with new_context():
+                        identify_context(str(request.user.id))
+                        capture("team_member_invited", properties={
+                            "role": invite_form.cleaned_data["role"],
+                        })
                 else:
                     ctx["team_member_duplicate"] = email
                     ctx["team_status"] = "info"
@@ -691,6 +711,10 @@ def close(request: AuthenticatedHttpRequest) -> HttpResponse:
             if sub := Subscription.objects.filter(user=user).first():
                 sub.cancel()
 
+            with new_context():
+                identify_context(str(user.id))
+                capture("account_closed")
+
             # Deleting user also deletes its profile, checks, channels etc.
             user.delete()
 
@@ -709,9 +733,13 @@ def close(request: AuthenticatedHttpRequest) -> HttpResponse:
 @login_required
 def remove_project(request: AuthenticatedHttpRequest, code: str) -> HttpResponse:
     project = get_object_or_404(Project, code=code, owner=request.user)
+    check_count = project.check_set.count()
     for check in project.check_set.all():
         check.rename_and_delete()
     project.delete()
+    with new_context():
+        identify_context(str(request.user.id))
+        capture("project_removed", properties={"check_count": check_count})
     return redirect("hc-index")
 
 

@@ -71,6 +71,10 @@ DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "healthchecks@example.org")
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL")
 USE_PAYMENTS = envbool("USE_PAYMENTS", "False")
 REGISTRATION_OPEN = envbool("REGISTRATION_OPEN", "True")
+
+POSTHOG_PROJECT_TOKEN = os.getenv("POSTHOG_PROJECT_TOKEN", "")
+POSTHOG_HOST = os.getenv("POSTHOG_HOST", "https://us.i.posthog.com")
+
 if admins := os.getenv("ADMINS"):
     ADMINS = admins.split(",")
 
@@ -145,6 +149,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "hc.accounts.middleware.TeamAccessMiddleware",
+    "posthog.integrations.django.PosthogContextMiddleware",
 ]
 
 if envbool("USE_GZIP_MIDDLEWARE", "False"):

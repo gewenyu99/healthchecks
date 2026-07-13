@@ -64,6 +64,9 @@ from hc.lib.string import is_valid_uuid_string
 from hc.lib.tz import all_timezones
 from hc.lib.urls import absolute_reverse
 
+import posthog
+from posthog import new_context, identify_context, capture
+
 logger = logging.getLogger(__name__)
 
 VALID_SORT_VALUES = ("name", "-name", "last_ping", "-last_ping", "created")
@@ -550,6 +553,10 @@ def add_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     check.assign_all_channels()
 
+    with new_context():
+        identify_context(str(request.user.id))
+        capture("check_created", properties={"kind": check.kind})
+
     url = reverse("hc-checks", args=[project.code])
     url += _get_referer_qs(request)  # Preserve selected tags and search
     return redirect(url)
@@ -836,6 +843,10 @@ def pause(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     # and Profile.next_nag_date needs to be cleared out:
     check.project.update_next_nag_dates()
 
+    with new_context():
+        identify_context(str(request.user.id))
+        capture("check_paused")
+
     # Don't redirect after an AJAX request:
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return HttpResponse()
@@ -858,6 +869,10 @@ def resume(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.alert_after = None
     check.save()
 
+    with new_context():
+        identify_context(str(request.user.id))
+        capture("check_resumed")
+
     return redirect("hc-details", code)
 
 
@@ -867,7 +882,11 @@ def remove_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check = _get_rw_check_for_user(request, code)
 
     project = check.project
+    check_kind = check.kind
     check.rename_and_delete()
+    with new_context():
+        identify_context(str(request.user.id))
+        capture("check_deleted", properties={"kind": check_kind})
     return redirect("hc-checks", project.code)
 
 
@@ -1319,6 +1338,9 @@ def send_test_notification(
         messages.warning(request, f"Could not send a test notification. {error}.")
     else:
         messages.success(request, "Test notification sent!")
+        with new_context():
+            identify_context(str(request.user.id))
+            capture("test_notification_sent", properties={"channel_kind": channel.kind})
 
     return redirect("hc-channels", channel.project.code)
 
@@ -1328,7 +1350,12 @@ def send_test_notification(
 def remove_channel(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     channel = _get_rw_channel_for_user(request, code)
     project = channel.project
+    channel_kind = channel.kind
     channel.delete()
+
+    with new_context():
+        identify_context(str(request.user.id))
+        capture("channel_removed", properties={"channel_kind": channel_kind})
 
     return redirect("hc-channels", project.code)
 

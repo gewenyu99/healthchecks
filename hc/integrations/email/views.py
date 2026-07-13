@@ -13,6 +13,9 @@ from hc.api.models import Channel
 from hc.front.views import _get_rw_project_for_user
 from hc.integrations.email import forms
 
+import posthog
+from posthog import new_context, identify_context, capture
+
 
 def email_form(request: AuthenticatedHttpRequest, channel: Channel) -> HttpResponse:
     adding = channel._state.adding
@@ -38,6 +41,9 @@ def email_form(request: AuthenticatedHttpRequest, channel: Channel) -> HttpRespo
 
             if adding:
                 channel.assign_all_checks()
+                with new_context():
+                    identify_context(str(request.user.id))
+                    capture("channel_added", properties={"channel_kind": "email"})
 
             if not channel.email_verified:
                 channel.send_verify_link()
