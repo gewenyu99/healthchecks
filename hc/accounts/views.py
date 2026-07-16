@@ -6,6 +6,7 @@ from datetime import timedelta as td
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
+import posthog
 import pyotp
 import segno
 from django.conf import settings
@@ -142,6 +143,9 @@ def _check_2fa(request: HttpRequest, user: User) -> HttpResponse:
         return redirect(path)
 
     auth_login(request, user)
+    with posthog.new_context():
+        posthog.identify_context(str(user.id))
+        posthog.capture("user_logged_in", properties={"login_method": "direct"})
     return _redirect_after_login(request)
 
 
@@ -203,6 +207,10 @@ def login(request: HttpRequest) -> HttpResponse:
 
 @require_POST
 def logout(request: HttpRequest) -> HttpResponse:
+    if request.user.is_authenticated:
+        with posthog.new_context():
+            posthog.identify_context(str(request.user.id))
+            posthog.capture("user_logged_out")
     auth_logout(request)
     return redirect("hc-index")
 
@@ -234,6 +242,9 @@ def signup(request: HttpRequest) -> HttpResponse:
             # If the user does not exist, create a new user account.
             tz = form.cleaned_data["tz"]
             user = _make_user(email, tz)
+            with posthog.new_context():
+                posthog.identify_context(str(user.id))
+                posthog.capture("user_signed_up")
 
         profile = Profile.objects.for_user(user)
         profile.send_instant_login_link()
@@ -355,6 +366,10 @@ def add_project(request: AuthenticatedHttpRequest) -> HttpResponse:
     project.name = form.cleaned_data["name"]
     project.save()
 
+    with posthog.new_context():
+        posthog.identify_context(str(request.user.id))
+        posthog.capture("project_created")
+
     return redirect("hc-checks", project.code)
 
 
@@ -386,13 +401,18 @@ def project(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
             if not rw:
                 return HttpResponseForbidden()
 
-            if request.POST["create_key"] == "api_key":
+            key_type = request.POST["create_key"]
+            if key_type == "api_key":
                 ctx["new_key"] = project.set_api_key()
-            elif request.POST["create_key"] == "api_key_readonly":
+            elif key_type == "api_key_readonly":
                 ctx["new_key"] = project.set_api_key_readonly()
-            elif request.POST["create_key"] == "ping_key":
+            elif key_type == "ping_key":
                 ctx["new_ping_key"] = project.set_ping_key()
             project.save()
+
+            with posthog.new_context():
+                posthog.identify_context(str(request.user.id))
+                posthog.capture("api_key_created", properties={"key_type": key_type})
 
             ctx["key_created"] = True
             ctx["api_status"] = "success"
@@ -432,6 +452,11 @@ def project(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
                 if project.invite(user, role=invite_form.cleaned_data["role"]):
                     ctx["team_member_invited"] = email
                     ctx["team_status"] = "success"
+                    with posthog.new_context():
+                        posthog.identify_context(str(request.user.id))
+                        posthog.capture("team_member_invited", properties={
+                            "role": invite_form.cleaned_data["role"],
+                        })
                 else:
                     ctx["team_member_duplicate"] = email
                     ctx["team_status"] = "info"
@@ -687,6 +712,10 @@ def close(request: AuthenticatedHttpRequest) -> HttpResponse:
 
     if request.method == "POST":
         if request.POST.get("confirmation") == request.user.email:
+            with posthog.new_context():
+                posthog.identify_context(str(user.id))
+                posthog.capture("account_closed")
+
             # Cancel their subscription:
             if sub := Subscription.objects.filter(user=user).first():
                 sub.cancel()
@@ -709,6 +738,9 @@ def close(request: AuthenticatedHttpRequest) -> HttpResponse:
 @login_required
 def remove_project(request: AuthenticatedHttpRequest, code: str) -> HttpResponse:
     project = get_object_or_404(Project, code=code, owner=request.user)
+    with posthog.new_context():
+        posthog.identify_context(str(request.user.id))
+        posthog.capture("project_deleted")
     for check in project.check_set.all():
         check.rename_and_delete()
     project.delete()
@@ -862,6 +894,9 @@ def login_webauthn(request: HttpRequest) -> HttpResponse:
         request.session.pop("state")
         request.session.pop("2fa_user")
         auth_login(request, user, "hc.accounts.backends.EmailBackend")
+        with posthog.new_context():
+            posthog.identify_context(str(user.id))
+            posthog.capture("user_logged_in", properties={"login_method": "webauthn"})
         return _redirect_after_login(request)
 
     options, request.session["state"] = helper.prepare()
@@ -916,6 +951,9 @@ def login_totp(request: HttpRequest) -> HttpResponse:
 
             request.session.pop("2fa_user")
             auth_login(request, user, "hc.accounts.backends.EmailBackend")
+            with posthog.new_context():
+                posthog.identify_context(str(user.id))
+                posthog.capture("user_logged_in", properties={"login_method": "totp"})
             return _redirect_after_login(request)
     else:
         form = forms.TotpForm(totp)
