@@ -63,8 +63,16 @@ from hc.lib.badges import get_badge_url
 from hc.lib.string import is_valid_uuid_string
 from hc.lib.tz import all_timezones
 from hc.lib.urls import absolute_reverse
+from hc.posthog import apps as posthog_apps
 
 logger = logging.getLogger(__name__)
+
+
+def _capture_event(request: AuthenticatedHttpRequest, event: str) -> None:
+    with posthog_apps.posthog_client.new_context():
+        posthog_apps.posthog_client.identify_context(str(request.user.id))
+        posthog_apps.posthog_client.capture(event)
+
 
 VALID_SORT_VALUES = ("name", "-name", "last_ping", "-last_ping", "created")
 STATUS_TEXT_TMPL = get_template("front/log_status_text.html")
@@ -550,6 +558,7 @@ def add_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     check.assign_all_channels()
 
+    _capture_event(request, "check_created")
     url = reverse("hc-checks", args=[project.code])
     url += _get_referer_qs(request)  # Preserve selected tags and search
     return redirect(url)
@@ -567,6 +576,7 @@ def update_name(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
         check.tags = form.cleaned_data["tags"]
         check.desc = form.cleaned_data["desc"]
         check.save()
+        _capture_event(request, "check_configuration_updated")
 
     if "/details/" in request.headers.get("Referer", ""):
         return redirect("hc-details", code)
@@ -660,6 +670,7 @@ def update_timeout(request: AuthenticatedHttpRequest, code: UUID) -> HttpRespons
     if not check_saved:
         check.save()
 
+    _capture_event(request, "check_schedule_updated")
     if "/details/" in request.headers.get("Referer", ""):
         return redirect("hc-details", code)
 
@@ -836,6 +847,7 @@ def pause(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     # and Profile.next_nag_date needs to be cleared out:
     check.project.update_next_nag_dates()
 
+    _capture_event(request, "check_paused")
     # Don't redirect after an AJAX request:
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return HttpResponse()
@@ -858,6 +870,7 @@ def resume(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.alert_after = None
     check.save()
 
+    _capture_event(request, "check_resumed")
     return redirect("hc-details", code)
 
 
@@ -868,6 +881,7 @@ def remove_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     project = check.project
     check.rename_and_delete()
+    _capture_event(request, "check_deleted")
     return redirect("hc-checks", project.code)
 
 
@@ -1100,6 +1114,7 @@ def copy(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     copied.channel_set.add(*check.channel_set.all())
 
+    _capture_event(request, "check_copied")
     url = reverse("hc-details", args=[copied.code], query={"copied": 1})
     return redirect(url)
 
@@ -1318,6 +1333,7 @@ def send_test_notification(
     if error:
         messages.warning(request, f"Could not send a test notification. {error}.")
     else:
+        _capture_event(request, "notification_test_sent")
         messages.success(request, "Test notification sent!")
 
     return redirect("hc-channels", channel.project.code)
@@ -1330,6 +1346,7 @@ def remove_channel(request: AuthenticatedHttpRequest, code: UUID) -> HttpRespons
     project = channel.project
     channel.delete()
 
+    _capture_event(request, "notification_channel_deleted")
     return redirect("hc-channels", project.code)
 
 

@@ -89,6 +89,7 @@ with (BASE_DIR / "CHANGELOG.md").open(encoding="utf-8") as f:
 
 INSTALLED_APPS = (
     "hc.accounts",
+    "hc.posthog.apps.PosthogConfig",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -145,6 +146,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "hc.accounts.middleware.TeamAccessMiddleware",
+    "posthog.integrations.django.PosthogContextMiddleware",
 ]
 
 if envbool("USE_GZIP_MIDDLEWARE", "False"):
@@ -263,6 +265,9 @@ PASSWORD_HASHERS = [
 ]
 
 SITE_ROOT = os.getenv("SITE_ROOT", "http://localhost:8000").removesuffix("/")
+
+POSTHOG_PROJECT_TOKEN = envsecret("POSTHOG_PROJECT_TOKEN")
+POSTHOG_HOST = os.getenv("POSTHOG_HOST")
 SITE_NAME = os.getenv("SITE_NAME", "Mychecks")
 SITE_LOGO_URL = os.getenv("SITE_LOGO_URL")
 MASTER_BADGE_LABEL = os.getenv("MASTER_BADGE_LABEL", SITE_NAME)
