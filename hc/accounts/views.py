@@ -31,6 +31,7 @@ from django.utils.timezone import now
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.debug import sensitive_post_parameters
 from django.views.decorators.http import require_POST
+from posthog import identify_context, new_context
 
 from hc.accounts import forms
 from hc.accounts.decorators import require_sudo_mode
@@ -40,6 +41,7 @@ from hc.api.models import Channel, Check, TokenBucket
 from hc.lib.tz import all_timezones
 from hc.lib.webauthn import CreateHelper, GetHelper
 from hc.payments.models import Subscription
+from hc.posthog import apps as posthog_apps
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +124,9 @@ def _redirect_after_login(request: HttpRequest) -> HttpResponse:
     return redirect("hc-index")
 
 
-def _check_2fa(request: HttpRequest, user: User) -> HttpResponse:
+def _check_2fa(
+    request: HttpRequest, user: User, login_method: str = "magic_link"
+) -> HttpResponse:
     have_keys = user.credentials.exists()
     profile = Profile.objects.for_user(user)
     if have_keys or profile.totp:
@@ -142,6 +146,11 @@ def _check_2fa(request: HttpRequest, user: User) -> HttpResponse:
         return redirect(path)
 
     auth_login(request, user)
+    with new_context():
+        identify_context(str(user.id))
+        posthog_apps.posthog_client.capture(
+            "user_logged_in", properties={"login_method": login_method}
+        )
     return _redirect_after_login(request)
 
 
@@ -167,7 +176,7 @@ def login(request: HttpRequest) -> HttpResponse:
             form = forms.PasswordLoginForm(request.POST)
             if form.is_valid():
                 assert isinstance(form.user, User)
-                return _check_2fa(request, form.user)
+                return _check_2fa(request, form.user, login_method="password")
 
         else:
             magic_form = forms.EmailLoginForm(request)
@@ -203,6 +212,11 @@ def login(request: HttpRequest) -> HttpResponse:
 
 @require_POST
 def logout(request: HttpRequest) -> HttpResponse:
+    if request.user.is_authenticated:
+        with new_context():
+            identify_context(str(request.user.id))
+            posthog_apps.posthog_client.capture("user_logged_out")
+
     auth_logout(request)
     return redirect("hc-index")
 
@@ -234,6 +248,11 @@ def signup(request: HttpRequest) -> HttpResponse:
             # If the user does not exist, create a new user account.
             tz = form.cleaned_data["tz"]
             user = _make_user(email, tz)
+            with new_context():
+                identify_context(str(user.id))
+                posthog_apps.posthog_client.capture(
+                    "user_signed_up", properties={"has_timezone": bool(tz)}
+                )
 
         profile = Profile.objects.for_user(user)
         profile.send_instant_login_link()
@@ -354,6 +373,10 @@ def add_project(request: AuthenticatedHttpRequest) -> HttpResponse:
     project.code = project.badge_key = str(uuid4())
     project.name = form.cleaned_data["name"]
     project.save()
+
+    with new_context():
+        identify_context(str(request.user.id))
+        posthog_apps.posthog_client.capture("project_created")
 
     return redirect("hc-checks", project.code)
 
@@ -862,6 +885,11 @@ def login_webauthn(request: HttpRequest) -> HttpResponse:
         request.session.pop("state")
         request.session.pop("2fa_user")
         auth_login(request, user, "hc.accounts.backends.EmailBackend")
+        with new_context():
+            identify_context(str(user.id))
+            posthog_apps.posthog_client.capture(
+                "user_logged_in", properties={"login_method": "webauthn"}
+            )
         return _redirect_after_login(request)
 
     options, request.session["state"] = helper.prepare()
@@ -916,6 +944,11 @@ def login_totp(request: HttpRequest) -> HttpResponse:
 
             request.session.pop("2fa_user")
             auth_login(request, user, "hc.accounts.backends.EmailBackend")
+            with new_context():
+                identify_context(str(user.id))
+                posthog_apps.posthog_client.capture(
+                    "user_logged_in", properties={"login_method": "totp"}
+                )
             return _redirect_after_login(request)
     else:
         form = forms.TotpForm(totp)
