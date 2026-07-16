@@ -13,6 +13,17 @@ from django.http.request import split_domain_port, validate_host
 class ApiConfig(AppConfig):
     name = "hc.api"
 
+    def ready(self) -> None:
+        import atexit
+
+        import posthog
+        from django.conf import settings
+
+        posthog.api_key = settings.POSTHOG_PROJECT_TOKEN
+        posthog.host = settings.POSTHOG_HOST
+        posthog.enable_exception_autocapture = True
+        atexit.register(posthog.shutdown)
+
 
 @register()  # W001, W002, W005, E002, E003
 def settings_check(

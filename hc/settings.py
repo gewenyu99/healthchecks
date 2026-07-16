@@ -145,6 +145,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "hc.accounts.middleware.TeamAccessMiddleware",
+    "posthog.integrations.django.PosthogContextMiddleware",
 ]
 
 if envbool("USE_GZIP_MIDDLEWARE", "False"):
@@ -337,6 +338,10 @@ S3_SECURE = envbool("S3_SECURE", "True")
 # To enable statsd metric collection, set STATSD_HOST="host:hostport"
 # (example: "localhost:8125")
 STATSD_HOST = os.getenv("STATSD_HOST")
+
+# PostHog analytics
+POSTHOG_PROJECT_TOKEN = os.getenv("POSTHOG_PROJECT_TOKEN", "")
+POSTHOG_HOST = os.getenv("POSTHOG_HOST", "https://us.i.posthog.com")
 
 # Integrations
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import email
+
+import posthog
 import logging
 import os
 import re
@@ -550,6 +552,10 @@ def add_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     check.assign_all_channels()
 
+    with posthog.new_context():
+        posthog.identify_context(str(request.user.id))
+        posthog.capture("check_created", properties={"kind": check.kind})
+
     url = reverse("hc-checks", args=[project.code])
     url += _get_referer_qs(request)  # Preserve selected tags and search
     return redirect(url)
@@ -659,6 +665,10 @@ def update_timeout(request: AuthenticatedHttpRequest, code: UUID) -> HttpRespons
 
     if not check_saved:
         check.save()
+
+    with posthog.new_context():
+        posthog.identify_context(str(request.user.id))
+        posthog.capture("check_timeout_updated", properties={"kind": check.kind})
 
     if "/details/" in request.headers.get("Referer", ""):
         return redirect("hc-details", code)
@@ -868,6 +878,9 @@ def remove_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     project = check.project
     check.rename_and_delete()
+    with posthog.new_context():
+        posthog.identify_context(str(request.user.id))
+        posthog.capture("check_deleted")
     return redirect("hc-checks", project.code)
 
 
