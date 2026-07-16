@@ -31,11 +31,13 @@ from django.utils.timezone import now
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.debug import sensitive_post_parameters
 from django.views.decorators.http import require_POST
+from posthog import identify_context, new_context
 
 from hc.accounts import forms
 from hc.accounts.decorators import require_sudo_mode
 from hc.accounts.http import AuthenticatedHttpRequest
 from hc.accounts.models import Credential, Member, Profile, Project
+from hc.api.apps import posthog_client
 from hc.api.models import Channel, Check, TokenBucket
 from hc.lib.tz import all_timezones
 from hc.lib.webauthn import CreateHelper, GetHelper
@@ -142,6 +144,13 @@ def _check_2fa(request: HttpRequest, user: User) -> HttpResponse:
         return redirect(path)
 
     auth_login(request, user)
+    posthog_client.set(str(user.id), properties={"email": user.email})
+    with new_context():
+        identify_context(str(user.id))
+        posthog_client.capture(
+            "account_logged_in",
+            properties={"two_factor_enabled": False},
+        )
     return _redirect_after_login(request)
 
 
@@ -203,6 +212,10 @@ def login(request: HttpRequest) -> HttpResponse:
 
 @require_POST
 def logout(request: HttpRequest) -> HttpResponse:
+    if request.user.is_authenticated:
+        with new_context():
+            identify_context(str(request.user.id))
+            posthog_client.capture("account_logged_out")
     auth_logout(request)
     return redirect("hc-index")
 
@@ -234,8 +247,12 @@ def signup(request: HttpRequest) -> HttpResponse:
             # If the user does not exist, create a new user account.
             tz = form.cleaned_data["tz"]
             user = _make_user(email, tz)
+            with new_context():
+                identify_context(str(user.id))
+                posthog_client.capture("account_created")
 
         profile = Profile.objects.for_user(user)
+        posthog_client.set(str(user.id), properties={"email": user.email})
         profile.send_instant_login_link()
     else:
         ctx = {"form": form}
@@ -355,6 +372,10 @@ def add_project(request: AuthenticatedHttpRequest) -> HttpResponse:
     project.name = form.cleaned_data["name"]
     project.save()
 
+    with new_context():
+        identify_context(str(request.user.id))
+        posthog_client.capture("project_created")
+
     return redirect("hc-checks", project.code)
 
 
@@ -465,6 +486,10 @@ def project(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
             if name_form.is_valid():
                 project.name = name_form.cleaned_data["name"]
                 project.save()
+
+                with new_context():
+                    identify_context(str(request.user.id))
+                    posthog_client.capture("project_name_updated")
 
                 ctx["project_name_updated"] = True
                 ctx["project_name_status"] = "success"
@@ -862,6 +887,13 @@ def login_webauthn(request: HttpRequest) -> HttpResponse:
         request.session.pop("state")
         request.session.pop("2fa_user")
         auth_login(request, user, "hc.accounts.backends.EmailBackend")
+        posthog_client.set(str(user.id), properties={"email": user.email})
+        with new_context():
+            identify_context(str(user.id))
+            posthog_client.capture(
+                "account_logged_in",
+                properties={"two_factor_enabled": True, "two_factor_method": "webauthn"},
+            )
         return _redirect_after_login(request)
 
     options, request.session["state"] = helper.prepare()
@@ -916,6 +948,13 @@ def login_totp(request: HttpRequest) -> HttpResponse:
 
             request.session.pop("2fa_user")
             auth_login(request, user, "hc.accounts.backends.EmailBackend")
+            posthog_client.set(str(user.id), properties={"email": user.email})
+            with new_context():
+                identify_context(str(user.id))
+                posthog_client.capture(
+                    "account_logged_in",
+                    properties={"two_factor_enabled": True, "two_factor_method": "totp"},
+                )
             return _redirect_after_login(request)
     else:
         form = forms.TotpForm(totp)
