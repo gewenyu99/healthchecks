@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from django.apps import apps
 from django.conf import settings
 from django.contrib import auth
 from django.core.exceptions import MiddlewareNotUsed
@@ -77,5 +78,11 @@ class CustomHeaderMiddleware:
             # by logging the user in.
             request.user = user
             auth.login(request, user)
+            posthog_client = apps.get_app_config("api").posthog_client
+            with posthog_client.new_context():
+                posthog_client.identify_context(str(user.id))
+                posthog_client.set(
+                    distinct_id=str(user.id), properties={"email": user.email}
+                )
 
         return self.get_response(request)

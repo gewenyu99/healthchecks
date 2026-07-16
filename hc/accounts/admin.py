@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from datetime import date, datetime
 from typing import TypedDict
 
+from django.apps import apps
 from django.contrib import admin
 from django.contrib.admin import ModelAdmin
 from django.contrib.auth import login as auth_login
@@ -209,6 +210,12 @@ class ProfileAdmin(ModelAdmin[Profile]):
     def login(self, r: HttpRequest, qs: QuerySet[Profile]) -> HttpResponseRedirect:
         profile = qs.get()
         auth_login(r, profile.user, "hc.accounts.backends.EmailBackend")
+        posthog_client = apps.get_app_config("api").posthog_client
+        with posthog_client.new_context():
+            posthog_client.identify_context(str(profile.user.id))
+            posthog_client.set(
+                distinct_id=str(profile.user.id), properties={"email": profile.user.email}
+            )
         return redirect("hc-index")
 
     def send_report(self, request: HttpRequest, qs: QuerySet[Profile]) -> None:

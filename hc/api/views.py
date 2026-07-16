@@ -11,6 +11,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from cronsim import CronSim, CronSimError
+from django.apps import apps
 from django.conf import settings
 from django.core.signing import BadSignature
 from django.db import connection, transaction
@@ -455,6 +456,12 @@ def create_check(request: ApiRequest) -> HttpResponse:
     except BadChannelException as e:
         return JsonResponse({"error": e.message}, status=400)
 
+    posthog_client = apps.get_app_config("api").posthog_client
+    with posthog_client.new_context():
+        posthog_client.identify_context(str(request.project.owner_id))
+        event = "api_check_created" if created else "api_check_updated"
+        posthog_client.capture(event, properties={"check_kind": check.kind})
+
     return JsonResponse(check.to_dict(v=request.v), status=201 if created else 200)
 
 
@@ -518,6 +525,11 @@ def update_check(request: ApiRequest, code: UUID) -> HttpResponse:
         except BadChannelException as e:
             return JsonResponse({"error": e.message}, status=400)
 
+    posthog_client = apps.get_app_config("api").posthog_client
+    with posthog_client.new_context():
+        posthog_client.identify_context(str(request.project.owner_id))
+        posthog_client.capture("api_check_updated", properties={"check_kind": check.kind})
+
     return JsonResponse(check.to_dict(v=request.v))
 
 
@@ -529,7 +541,14 @@ def delete_check(request: ApiRequest, code: UUID) -> HttpResponse:
     if check.project_id != request.project.id:
         return HttpResponseForbidden()
 
+    check_kind = check.kind
     check.rename_and_delete()
+
+    posthog_client = apps.get_app_config("api").posthog_client
+    with posthog_client.new_context():
+        posthog_client.identify_context(str(request.project.owner_id))
+        posthog_client.capture("api_check_deleted", properties={"check_kind": check_kind})
+
     return JsonResponse(check.to_dict(v=request.v))
 
 
@@ -569,6 +588,11 @@ def pause(request: ApiRequest, code: UUID) -> HttpResponse:
     # and Profile.next_nag_date needs to be cleared out:
     check.project.update_next_nag_dates()
 
+    posthog_client = apps.get_app_config("api").posthog_client
+    with posthog_client.new_context():
+        posthog_client.identify_context(str(request.project.owner_id))
+        posthog_client.capture("api_check_paused", properties={"check_kind": check.kind})
+
     return JsonResponse(check.to_dict(v=request.v))
 
 
@@ -590,6 +614,11 @@ def resume(request: ApiRequest, code: UUID) -> HttpResponse:
     check.last_ping = None
     check.alert_after = None
     check.save()
+
+    posthog_client = apps.get_app_config("api").posthog_client
+    with posthog_client.new_context():
+        posthog_client.identify_context(str(request.project.owner_id))
+        posthog_client.capture("api_check_resumed", properties={"check_kind": check.kind})
 
     return JsonResponse(check.to_dict(v=request.v))
 
