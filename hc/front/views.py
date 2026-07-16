@@ -5,6 +5,8 @@ import logging
 import os
 import re
 import sqlite3
+
+from posthog import identify_context, new_context
 from collections import Counter, defaultdict
 from collections.abc import Iterable
 from datetime import datetime
@@ -16,6 +18,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from cronsim import CronSim
+from django.apps import apps
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -548,6 +551,10 @@ def add_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.grace = form.cleaned_data["grace"]
     check.save()
 
+    with new_context():
+        identify_context(str(request.user.pk))
+        apps.get_app_config("api").posthog_client.capture(event="check_created")
+
     check.assign_all_channels()
 
     url = reverse("hc-checks", args=[project.code])
@@ -836,6 +843,10 @@ def pause(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     # and Profile.next_nag_date needs to be cleared out:
     check.project.update_next_nag_dates()
 
+    with new_context():
+        identify_context(str(request.user.pk))
+        apps.get_app_config("api").posthog_client.capture(event="check_paused")
+
     # Don't redirect after an AJAX request:
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return HttpResponse()
@@ -858,6 +869,10 @@ def resume(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.alert_after = None
     check.save()
 
+    with new_context():
+        identify_context(str(request.user.pk))
+        apps.get_app_config("api").posthog_client.capture(event="check_resumed")
+
     return redirect("hc-details", code)
 
 
@@ -868,6 +883,11 @@ def remove_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     project = check.project
     check.rename_and_delete()
+
+    with new_context():
+        identify_context(str(request.user.pk))
+        apps.get_app_config("api").posthog_client.capture(event="check_deleted")
+
     return redirect("hc-checks", project.code)
 
 
@@ -1099,6 +1119,10 @@ def copy(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     copied.save()
 
     copied.channel_set.add(*check.channel_set.all())
+
+    with new_context():
+        identify_context(str(request.user.pk))
+        apps.get_app_config("api").posthog_client.capture(event="check_copied")
 
     url = reverse("hc-details", args=[copied.code], query={"copied": 1})
     return redirect(url)
