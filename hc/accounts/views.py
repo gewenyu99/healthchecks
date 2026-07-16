@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import pyotp
 import segno
+from django.apps import apps
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import authenticate, update_session_auth_hash
@@ -142,6 +143,11 @@ def _check_2fa(request: HttpRequest, user: User) -> HttpResponse:
         return redirect(path)
 
     auth_login(request, user)
+    apps.get_app_config("hc").posthog_client.capture(
+        distinct_id=str(user.id),
+        event="user_logged_in",
+        properties={"authentication_method": "password"},
+    )
     return _redirect_after_login(request)
 
 
@@ -203,6 +209,11 @@ def login(request: HttpRequest) -> HttpResponse:
 
 @require_POST
 def logout(request: HttpRequest) -> HttpResponse:
+    if request.user.is_authenticated:
+        apps.get_app_config("hc").posthog_client.capture(
+            distinct_id=str(request.user.id),
+            event="user_logged_out",
+        )
     auth_logout(request)
     return redirect("hc-index")
 
@@ -223,6 +234,7 @@ def signup(request: HttpRequest) -> HttpResponse:
     form = forms.SignupForm(request)
     if form.is_valid():
         email = form.cleaned_data["identity"]
+        account_created = False
         try:
             user = User.objects.get(email=email)
             # Sometimes existing users forget they already have an account.
@@ -234,9 +246,15 @@ def signup(request: HttpRequest) -> HttpResponse:
             # If the user does not exist, create a new user account.
             tz = form.cleaned_data["tz"]
             user = _make_user(email, tz)
+            account_created = True
 
         profile = Profile.objects.for_user(user)
         profile.send_instant_login_link()
+        if account_created:
+            apps.get_app_config("hc").posthog_client.capture(
+                distinct_id=str(user.id),
+                event="account_registered",
+            )
     else:
         ctx = {"form": form}
 
@@ -355,6 +373,10 @@ def add_project(request: AuthenticatedHttpRequest) -> HttpResponse:
     project.name = form.cleaned_data["name"]
     project.save()
 
+    apps.get_app_config("hc").posthog_client.capture(
+        distinct_id=str(request.user.id),
+        event="project_created",
+    )
     return redirect("hc-checks", project.code)
 
 
@@ -430,6 +452,11 @@ def project(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
                     user = _make_user(email, with_project=False)
 
                 if project.invite(user, role=invite_form.cleaned_data["role"]):
+                    apps.get_app_config("hc").posthog_client.capture(
+                        distinct_id=str(request.user.id),
+                        event="team_member_invited",
+                        properties={"role": invite_form.cleaned_data["role"]},
+                    )
                     ctx["team_member_invited"] = email
                     ctx["team_status"] = "success"
                 else:
@@ -862,6 +889,11 @@ def login_webauthn(request: HttpRequest) -> HttpResponse:
         request.session.pop("state")
         request.session.pop("2fa_user")
         auth_login(request, user, "hc.accounts.backends.EmailBackend")
+        apps.get_app_config("hc").posthog_client.capture(
+            distinct_id=str(user.id),
+            event="user_logged_in",
+            properties={"authentication_method": "webauthn"},
+        )
         return _redirect_after_login(request)
 
     options, request.session["state"] = helper.prepare()
@@ -916,6 +948,11 @@ def login_totp(request: HttpRequest) -> HttpResponse:
 
             request.session.pop("2fa_user")
             auth_login(request, user, "hc.accounts.backends.EmailBackend")
+            apps.get_app_config("hc").posthog_client.capture(
+                distinct_id=str(user.id),
+                event="user_logged_in",
+                properties={"authentication_method": "totp"},
+            )
             return _redirect_after_login(request)
     else:
         form = forms.TotpForm(totp)

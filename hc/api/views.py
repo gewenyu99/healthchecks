@@ -11,6 +11,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from cronsim import CronSim, CronSimError
+from django.apps import apps
 from django.conf import settings
 from django.core.signing import BadSignature
 from django.db import connection, transaction
@@ -454,6 +455,13 @@ def create_check(request: ApiRequest) -> HttpResponse:
         _update(check, spec, request.v)
     except BadChannelException as e:
         return JsonResponse({"error": e.message}, status=400)
+
+    if created:
+        apps.get_app_config("hc").posthog_client.capture(
+            distinct_id=str(request.project.owner_id),
+            event="api_check_created",
+            properties={"check_kind": check.kind, "api_version": request.v},
+        )
 
     return JsonResponse(check.to_dict(v=request.v), status=201 if created else 200)
 

@@ -65,6 +65,8 @@ def envsecret(s: str, default: str | None = None) -> str | None:
 
 
 SECRET_KEY = envsecret("SECRET_KEY", "---")
+POSTHOG_PROJECT_TOKEN = envsecret("POSTHOG_PROJECT_TOKEN")
+POSTHOG_HOST = os.getenv("POSTHOG_HOST")
 METRICS_KEY = os.getenv("METRICS_KEY")
 DEBUG = envbool("DEBUG", "True")
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "healthchecks@example.org")
@@ -88,6 +90,7 @@ with (BASE_DIR / "CHANGELOG.md").open(encoding="utf-8") as f:
 
 
 INSTALLED_APPS = (
+    "hc.apps.HealthchecksConfig",
     "hc.accounts",
     "django.contrib.admin",
     "django.contrib.auth",
@@ -145,6 +148,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "hc.accounts.middleware.TeamAccessMiddleware",
+    "posthog.integrations.django.PosthogContextMiddleware",
 ]
 
 if envbool("USE_GZIP_MIDDLEWARE", "False"):
