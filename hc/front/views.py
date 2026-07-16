@@ -37,6 +37,7 @@ from django.utils.timezone import now
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django_stubs_ext import WithAnnotations
+import posthog
 from oncalendar import OnCalendar, OnCalendarError
 
 from hc.accounts.http import AuthenticatedHttpRequest
@@ -550,6 +551,12 @@ def add_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     check.assign_all_channels()
 
+    with posthog.new_context():
+        posthog.identify_context(str(request.user.id))
+        posthog.capture("check_created", properties={
+            "check_kind": check.kind,
+        })
+
     url = reverse("hc-checks", args=[project.code])
     url += _get_referer_qs(request)  # Preserve selected tags and search
     return redirect(url)
@@ -836,6 +843,12 @@ def pause(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     # and Profile.next_nag_date needs to be cleared out:
     check.project.update_next_nag_dates()
 
+    with posthog.new_context():
+        posthog.identify_context(str(request.user.id))
+        posthog.capture("check_paused", properties={
+            "check_kind": check.kind,
+        })
+
     # Don't redirect after an AJAX request:
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return HttpResponse()
@@ -858,6 +871,12 @@ def resume(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.alert_after = None
     check.save()
 
+    with posthog.new_context():
+        posthog.identify_context(str(request.user.id))
+        posthog.capture("check_resumed", properties={
+            "check_kind": check.kind,
+        })
+
     return redirect("hc-details", code)
 
 
@@ -867,6 +886,11 @@ def remove_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check = _get_rw_check_for_user(request, code)
 
     project = check.project
+    with posthog.new_context():
+        posthog.identify_context(str(request.user.id))
+        posthog.capture("check_deleted", properties={
+            "check_kind": check.kind,
+        })
     check.rename_and_delete()
     return redirect("hc-checks", project.code)
 
@@ -1320,6 +1344,13 @@ def send_test_notification(
     else:
         messages.success(request, "Test notification sent!")
 
+    with posthog.new_context():
+        posthog.identify_context(str(request.user.id))
+        posthog.capture("test_notification_sent", properties={
+            "channel_kind": channel.kind,
+            "success": not error,
+        })
+
     return redirect("hc-channels", channel.project.code)
 
 
@@ -1328,6 +1359,11 @@ def send_test_notification(
 def remove_channel(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     channel = _get_rw_channel_for_user(request, code)
     project = channel.project
+    with posthog.new_context():
+        posthog.identify_context(str(request.user.id))
+        posthog.capture("channel_deleted", properties={
+            "channel_kind": channel.kind,
+        })
     channel.delete()
 
     return redirect("hc-channels", project.code)
