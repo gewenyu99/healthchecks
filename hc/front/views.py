@@ -38,6 +38,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django_stubs_ext import WithAnnotations
 from oncalendar import OnCalendar, OnCalendarError
+from posthog import capture, identify_context, new_context
 
 from hc.accounts.http import AuthenticatedHttpRequest
 from hc.accounts.models import Member, Profile, Project
@@ -548,6 +549,9 @@ def add_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.grace = form.cleaned_data["grace"]
     check.save()
 
+    with new_context():
+        identify_context(str(request.user.id))
+        capture("check_created", properties={"check_kind": check.kind})
     check.assign_all_channels()
 
     url = reverse("hc-checks", args=[project.code])
@@ -832,6 +836,10 @@ def pause(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.alert_after = None
     check.save()
 
+    with new_context():
+        identify_context(str(request.user.id))
+        capture("check_paused", properties={"check_kind": check.kind})
+
     # After pausing a check we must check if all checks are up,
     # and Profile.next_nag_date needs to be cleared out:
     check.project.update_next_nag_dates()
@@ -858,6 +866,9 @@ def resume(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.alert_after = None
     check.save()
 
+    with new_context():
+        identify_context(str(request.user.id))
+        capture("check_resumed", properties={"check_kind": check.kind})
     return redirect("hc-details", code)
 
 
@@ -867,7 +878,11 @@ def remove_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check = _get_rw_check_for_user(request, code)
 
     project = check.project
+    check_kind = check.kind
     check.rename_and_delete()
+    with new_context():
+        identify_context(str(request.user.id))
+        capture("check_deleted", properties={"check_kind": check_kind})
     return redirect("hc-checks", project.code)
 
 
@@ -1318,6 +1333,9 @@ def send_test_notification(
     if error:
         messages.warning(request, f"Could not send a test notification. {error}.")
     else:
+        with new_context():
+            identify_context(str(request.user.id))
+            capture("notification_test_sent", properties={"channel_kind": channel.kind})
         messages.success(request, "Test notification sent!")
 
     return redirect("hc-channels", channel.project.code)
@@ -1328,8 +1346,12 @@ def send_test_notification(
 def remove_channel(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     channel = _get_rw_channel_for_user(request, code)
     project = channel.project
+    channel_kind = channel.kind
     channel.delete()
 
+    with new_context():
+        identify_context(str(request.user.id))
+        capture("notification_channel_deleted", properties={"channel_kind": channel_kind})
     return redirect("hc-channels", project.code)
 
 

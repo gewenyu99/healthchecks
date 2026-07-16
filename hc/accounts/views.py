@@ -31,6 +31,7 @@ from django.utils.timezone import now
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.debug import sensitive_post_parameters
 from django.views.decorators.http import require_POST
+from posthog import capture, identify_context, new_context
 
 from hc.accounts import forms
 from hc.accounts.decorators import require_sudo_mode
@@ -40,6 +41,7 @@ from hc.api.models import Channel, Check, TokenBucket
 from hc.lib.tz import all_timezones
 from hc.lib.webauthn import CreateHelper, GetHelper
 from hc.payments.models import Subscription
+import hc.posthog.apps as posthog_apps
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +144,12 @@ def _check_2fa(request: HttpRequest, user: User) -> HttpResponse:
         return redirect(path)
 
     auth_login(request, user)
+    posthog_apps.posthog_client.set(
+        distinct_id=str(user.id), properties={"email": user.email}
+    )
+    with new_context():
+        identify_context(str(user.id))
+        capture("user_logged_in")
     return _redirect_after_login(request)
 
 
@@ -203,6 +211,10 @@ def login(request: HttpRequest) -> HttpResponse:
 
 @require_POST
 def logout(request: HttpRequest) -> HttpResponse:
+    if request.user.is_authenticated:
+        with new_context():
+            identify_context(str(request.user.id))
+            capture("user_logged_out")
     auth_logout(request)
     return redirect("hc-index")
 
@@ -223,6 +235,7 @@ def signup(request: HttpRequest) -> HttpResponse:
     form = forms.SignupForm(request)
     if form.is_valid():
         email = form.cleaned_data["identity"]
+        created = False
         try:
             user = User.objects.get(email=email)
             # Sometimes existing users forget they already have an account.
@@ -234,7 +247,15 @@ def signup(request: HttpRequest) -> HttpResponse:
             # If the user does not exist, create a new user account.
             tz = form.cleaned_data["tz"]
             user = _make_user(email, tz)
+            created = True
 
+        posthog_apps.posthog_client.set(
+            distinct_id=str(user.id), properties={"email": user.email}
+        )
+        if created:
+            with new_context():
+                identify_context(str(user.id))
+                capture("account_signed_up")
         profile = Profile.objects.for_user(user)
         profile.send_instant_login_link()
     else:
@@ -355,6 +376,9 @@ def add_project(request: AuthenticatedHttpRequest) -> HttpResponse:
     project.name = form.cleaned_data["name"]
     project.save()
 
+    with new_context():
+        identify_context(str(request.user.id))
+        capture("project_created")
     return redirect("hc-checks", project.code)
 
 
@@ -430,6 +454,12 @@ def project(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
                     user = _make_user(email, with_project=False)
 
                 if project.invite(user, role=invite_form.cleaned_data["role"]):
+                    with new_context():
+                        identify_context(str(request.user.id))
+                        capture(
+                            "team_member_invited",
+                            properties={"role": invite_form.cleaned_data["role"]},
+                        )
                     ctx["team_member_invited"] = email
                     ctx["team_status"] = "success"
                 else:
@@ -691,6 +721,10 @@ def close(request: AuthenticatedHttpRequest) -> HttpResponse:
             if sub := Subscription.objects.filter(user=user).first():
                 sub.cancel()
 
+            with new_context():
+                identify_context(str(user.id))
+                capture("account_closed")
+
             # Deleting user also deletes its profile, checks, channels etc.
             user.delete()
 
@@ -862,6 +896,9 @@ def login_webauthn(request: HttpRequest) -> HttpResponse:
         request.session.pop("state")
         request.session.pop("2fa_user")
         auth_login(request, user, "hc.accounts.backends.EmailBackend")
+        posthog_apps.posthog_client.set(
+            distinct_id=str(user.id), properties={"email": user.email}
+        )
         return _redirect_after_login(request)
 
     options, request.session["state"] = helper.prepare()
@@ -916,6 +953,9 @@ def login_totp(request: HttpRequest) -> HttpResponse:
 
             request.session.pop("2fa_user")
             auth_login(request, user, "hc.accounts.backends.EmailBackend")
+            posthog_apps.posthog_client.set(
+                distinct_id=str(user.id), properties={"email": user.email}
+            )
             return _redirect_after_login(request)
     else:
         form = forms.TotpForm(totp)

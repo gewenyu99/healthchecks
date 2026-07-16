@@ -8,6 +8,7 @@ from django.core.exceptions import MiddlewareNotUsed
 from django.http import HttpRequest, HttpResponse
 
 from hc.accounts.models import Profile
+import hc.posthog.apps as posthog_apps
 
 MiddlewareFunc = Callable[[HttpRequest], HttpResponse]
 
@@ -77,5 +78,8 @@ class CustomHeaderMiddleware:
             # by logging the user in.
             request.user = user
             auth.login(request, user)
+            posthog_apps.posthog_client.set(
+                distinct_id=str(user.id), properties={"email": user.email}
+            )
 
         return self.get_response(request)

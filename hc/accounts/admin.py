@@ -19,6 +19,7 @@ from django_stubs_ext import WithAnnotations
 
 from hc.accounts.models import Credential, Profile, Project
 from hc.api.models import Check
+import hc.posthog.apps as posthog_apps
 
 Lookups = Iterable[tuple[str, str]]
 
@@ -209,6 +210,9 @@ class ProfileAdmin(ModelAdmin[Profile]):
     def login(self, r: HttpRequest, qs: QuerySet[Profile]) -> HttpResponseRedirect:
         profile = qs.get()
         auth_login(r, profile.user, "hc.accounts.backends.EmailBackend")
+        posthog_apps.posthog_client.set(
+            distinct_id=str(profile.user.id), properties={"email": profile.user.email}
+        )
         return redirect("hc-index")
 
     def send_report(self, request: HttpRequest, qs: QuerySet[Profile]) -> None:
