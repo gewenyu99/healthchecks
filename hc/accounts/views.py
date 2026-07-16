@@ -8,6 +8,8 @@ from uuid import UUID, uuid4
 
 import pyotp
 import segno
+from django.apps import apps
+from posthog import identify_context, new_context
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import authenticate, update_session_auth_hash
@@ -79,6 +81,11 @@ def _make_user(email: str, tz: str | None = None, with_project: bool = True) -> 
     user.set_unusable_password()
     user.save()
 
+    apps.get_app_config("hc").posthog_client.set(
+        distinct_id=str(user.pk),
+        properties={"email": user.email},
+    )
+
     project = None
     if with_project:
         project = Project(owner=user)
@@ -142,6 +149,13 @@ def _check_2fa(request: HttpRequest, user: User) -> HttpResponse:
         return redirect(path)
 
     auth_login(request, user)
+    apps.get_app_config("hc").posthog_client.set(
+        distinct_id=str(user.pk),
+        properties={"email": user.email},
+    )
+    with new_context():
+        identify_context(str(user.pk))
+        apps.get_app_config("hc").posthog_client.capture("user_logged_in")
     return _redirect_after_login(request)
 
 
@@ -203,6 +217,10 @@ def login(request: HttpRequest) -> HttpResponse:
 
 @require_POST
 def logout(request: HttpRequest) -> HttpResponse:
+    if request.user.is_authenticated:
+        with new_context():
+            identify_context(str(request.user.pk))
+            apps.get_app_config("hc").posthog_client.capture("user_logged_out")
     auth_logout(request)
     return redirect("hc-index")
 
@@ -237,6 +255,9 @@ def signup(request: HttpRequest) -> HttpResponse:
 
         profile = Profile.objects.for_user(user)
         profile.send_instant_login_link()
+        with new_context():
+            identify_context(str(user.pk))
+            apps.get_app_config("hc").posthog_client.capture("account_signup_requested")
     else:
         ctx = {"form": form}
 
@@ -354,6 +375,10 @@ def add_project(request: AuthenticatedHttpRequest) -> HttpResponse:
     project.code = project.badge_key = str(uuid4())
     project.name = form.cleaned_data["name"]
     project.save()
+
+    with new_context():
+        identify_context(str(request.user.pk))
+        apps.get_app_config("hc").posthog_client.capture("project_created")
 
     return redirect("hc-checks", project.code)
 
@@ -712,6 +737,11 @@ def remove_project(request: AuthenticatedHttpRequest, code: str) -> HttpResponse
     for check in project.check_set.all():
         check.rename_and_delete()
     project.delete()
+
+    with new_context():
+        identify_context(str(request.user.pk))
+        apps.get_app_config("hc").posthog_client.capture("project_deleted")
+
     return redirect("hc-index")
 
 
@@ -862,6 +892,10 @@ def login_webauthn(request: HttpRequest) -> HttpResponse:
         request.session.pop("state")
         request.session.pop("2fa_user")
         auth_login(request, user, "hc.accounts.backends.EmailBackend")
+        apps.get_app_config("hc").posthog_client.set(
+            distinct_id=str(user.pk),
+            properties={"email": user.email},
+        )
         return _redirect_after_login(request)
 
     options, request.session["state"] = helper.prepare()
@@ -916,6 +950,10 @@ def login_totp(request: HttpRequest) -> HttpResponse:
 
             request.session.pop("2fa_user")
             auth_login(request, user, "hc.accounts.backends.EmailBackend")
+            apps.get_app_config("hc").posthog_client.set(
+                distinct_id=str(user.pk),
+                properties={"email": user.email},
+            )
             return _redirect_after_login(request)
     else:
         form = forms.TotpForm(totp)
