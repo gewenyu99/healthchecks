@@ -66,6 +66,8 @@ def envsecret(s: str, default: str | None = None) -> str | None:
 
 SECRET_KEY = envsecret("SECRET_KEY", "---")
 METRICS_KEY = os.getenv("METRICS_KEY")
+POSTHOG_PROJECT_TOKEN = os.getenv("POSTHOG_PROJECT_TOKEN")
+POSTHOG_HOST = os.getenv("POSTHOG_HOST", "https://us.i.posthog.com")
 DEBUG = envbool("DEBUG", "True")
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "healthchecks@example.org")
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL")
@@ -89,6 +91,7 @@ with (BASE_DIR / "CHANGELOG.md").open(encoding="utf-8") as f:
 
 INSTALLED_APPS = (
     "hc.accounts",
+    "hc.posthog.apps.PostHogConfig",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -142,6 +145,7 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "hc.accounts.middleware.CustomHeaderMiddleware",
+    "posthog.integrations.django.PosthogContextMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "hc.accounts.middleware.TeamAccessMiddleware",

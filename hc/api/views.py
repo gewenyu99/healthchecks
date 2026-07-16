@@ -43,6 +43,7 @@ from hc.lib.badges import check_signature, get_badge_svg, get_badge_url
 from hc.lib.signing import unsign_bounce_id
 from hc.lib.string import is_valid_uuid_string, match_keywords
 from hc.lib.tz import all_timezones, legacy_timezones
+from hc.posthog import apps as posthog_apps
 
 
 class BadChannelException(Exception):
@@ -455,6 +456,13 @@ def create_check(request: ApiRequest) -> HttpResponse:
     except BadChannelException as e:
         return JsonResponse({"error": e.message}, status=400)
 
+    if created:
+        with posthog_apps.posthog_client.new_context():
+            posthog_apps.posthog_client.identify_context(str(request.project.owner_id))
+            posthog_apps.posthog_client.capture(
+                "api_check_created", properties={"check_kind": check.kind}
+            )
+
     return JsonResponse(check.to_dict(v=request.v), status=201 if created else 200)
 
 
@@ -529,7 +537,15 @@ def delete_check(request: ApiRequest, code: UUID) -> HttpResponse:
     if check.project_id != request.project.id:
         return HttpResponseForbidden()
 
+    check_kind = check.kind
     check.rename_and_delete()
+
+    with posthog_apps.posthog_client.new_context():
+        posthog_apps.posthog_client.identify_context(str(request.project.owner_id))
+        posthog_apps.posthog_client.capture(
+            "api_check_deleted", properties={"check_kind": check_kind}
+        )
+
     return JsonResponse(check.to_dict(v=request.v))
 
 
