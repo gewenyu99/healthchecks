@@ -87,7 +87,12 @@ with (BASE_DIR / "CHANGELOG.md").open(encoding="utf-8") as f:
             break
 
 
+POSTHOG_PROJECT_TOKEN = os.getenv("POSTHOG_PROJECT_TOKEN")
+POSTHOG_HOST = os.getenv("POSTHOG_HOST")
+
+
 INSTALLED_APPS = (
+    "hc.apps.PostHogConfig",
     "hc.accounts",
     "django.contrib.admin",
     "django.contrib.auth",
@@ -145,6 +150,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "hc.accounts.middleware.TeamAccessMiddleware",
+    "posthog.integrations.django.PosthogContextMiddleware",
 ]
 
 if envbool("USE_GZIP_MIDDLEWARE", "False"):

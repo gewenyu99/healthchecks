@@ -8,6 +8,8 @@ from uuid import UUID, uuid4
 
 import pyotp
 import segno
+
+from django.apps import apps
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import authenticate, update_session_auth_hash
@@ -40,6 +42,7 @@ from hc.api.models import Channel, Check, TokenBucket
 from hc.lib.tz import all_timezones
 from hc.lib.webauthn import CreateHelper, GetHelper
 from hc.payments.models import Subscription
+from posthog import identify_context, new_context
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +125,9 @@ def _redirect_after_login(request: HttpRequest) -> HttpResponse:
     return redirect("hc-index")
 
 
-def _check_2fa(request: HttpRequest, user: User) -> HttpResponse:
+def _check_2fa(
+    request: HttpRequest, user: User, login_method: str
+) -> HttpResponse:
     have_keys = user.credentials.exists()
     profile = Profile.objects.for_user(user)
     if have_keys or profile.totp:
@@ -142,6 +147,15 @@ def _check_2fa(request: HttpRequest, user: User) -> HttpResponse:
         return redirect(path)
 
     auth_login(request, user)
+    apps.get_app_config("hc").posthog.set(
+        distinct_id=str(user.pk),
+        properties={"email": user.email, "is_staff": user.is_staff},
+    )
+    with new_context():
+        identify_context(str(user.id))
+        apps.get_app_config("hc").posthog.capture(
+            "user_logged_in", properties={"login_method": login_method}
+        )
     return _redirect_after_login(request)
 
 
@@ -167,7 +181,7 @@ def login(request: HttpRequest) -> HttpResponse:
             form = forms.PasswordLoginForm(request.POST)
             if form.is_valid():
                 assert isinstance(form.user, User)
-                return _check_2fa(request, form.user)
+                return _check_2fa(request, form.user, "password")
 
         else:
             magic_form = forms.EmailLoginForm(request)
@@ -203,6 +217,10 @@ def login(request: HttpRequest) -> HttpResponse:
 
 @require_POST
 def logout(request: HttpRequest) -> HttpResponse:
+    if request.user.is_authenticated:
+        with new_context():
+            identify_context(str(request.user.id))
+            apps.get_app_config("hc").posthog.capture("user_logged_out")
     auth_logout(request)
     return redirect("hc-index")
 
@@ -220,6 +238,7 @@ def signup(request: HttpRequest) -> HttpResponse:
         return HttpResponseForbidden()
 
     ctx: dict[str, object] = {}
+    account_created = False
     form = forms.SignupForm(request)
     if form.is_valid():
         email = form.cleaned_data["identity"]
@@ -234,9 +253,16 @@ def signup(request: HttpRequest) -> HttpResponse:
             # If the user does not exist, create a new user account.
             tz = form.cleaned_data["tz"]
             user = _make_user(email, tz)
+            account_created = True
 
         profile = Profile.objects.for_user(user)
         profile.send_instant_login_link()
+        if account_created:
+            with new_context():
+                identify_context(str(user.id))
+                apps.get_app_config("hc").posthog.capture(
+                    "account_registered", properties={"signup_method": "email"}
+                )
     else:
         ctx = {"form": form}
 
@@ -278,7 +304,7 @@ def check_token(
 
         user.profile.token = ""
         user.profile.save()
-        return _check_2fa(request, user)
+        return _check_2fa(request, user, "magic_link")
 
     request.session["bad_link"] = True
     return redirect("hc-login")
@@ -354,6 +380,10 @@ def add_project(request: AuthenticatedHttpRequest) -> HttpResponse:
     project.code = project.badge_key = str(uuid4())
     project.name = form.cleaned_data["name"]
     project.save()
+
+    with new_context():
+        identify_context(str(request.user.id))
+        apps.get_app_config("hc").posthog.capture("project_created")
 
     return redirect("hc-checks", project.code)
 
@@ -862,6 +892,15 @@ def login_webauthn(request: HttpRequest) -> HttpResponse:
         request.session.pop("state")
         request.session.pop("2fa_user")
         auth_login(request, user, "hc.accounts.backends.EmailBackend")
+        apps.get_app_config("hc").posthog.set(
+            distinct_id=str(user.pk),
+            properties={"email": user.email, "is_staff": user.is_staff},
+        )
+        with new_context():
+            identify_context(str(user.id))
+            apps.get_app_config("hc").posthog.capture(
+                "user_logged_in", properties={"login_method": "webauthn"}
+            )
         return _redirect_after_login(request)
 
     options, request.session["state"] = helper.prepare()
@@ -916,6 +955,15 @@ def login_totp(request: HttpRequest) -> HttpResponse:
 
             request.session.pop("2fa_user")
             auth_login(request, user, "hc.accounts.backends.EmailBackend")
+            apps.get_app_config("hc").posthog.set(
+                distinct_id=str(user.pk),
+                properties={"email": user.email, "is_staff": user.is_staff},
+            )
+            with new_context():
+                identify_context(str(user.id))
+                apps.get_app_config("hc").posthog.capture(
+                    "user_logged_in", properties={"login_method": "totp"}
+                )
             return _redirect_after_login(request)
     else:
         form = forms.TotpForm(totp)
