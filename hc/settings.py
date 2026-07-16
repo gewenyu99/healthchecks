@@ -71,6 +71,8 @@ DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "healthchecks@example.org")
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL")
 USE_PAYMENTS = envbool("USE_PAYMENTS", "False")
 REGISTRATION_OPEN = envbool("REGISTRATION_OPEN", "True")
+POSTHOG_PROJECT_TOKEN = os.environ["POSTHOG_PROJECT_TOKEN"]
+POSTHOG_HOST = os.environ["POSTHOG_HOST"]
 if admins := os.getenv("ADMINS"):
     ADMINS = admins.split(",")
 
@@ -97,7 +99,7 @@ INSTALLED_APPS = (
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "compressor",
-    "hc.api",
+    "hc.api.apps.ApiConfig",
     "hc.front",
     "hc.logs",
     "hc.payments",
@@ -141,6 +143,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "posthog.integrations.django.PosthogContextMiddleware",
     "hc.accounts.middleware.CustomHeaderMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
