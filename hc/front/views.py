@@ -38,7 +38,9 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django_stubs_ext import WithAnnotations
 from oncalendar import OnCalendar, OnCalendarError
+from posthog import identify_context, new_context
 
+from hc import posthog
 from hc.accounts.http import AuthenticatedHttpRequest
 from hc.accounts.models import Member, Profile, Project
 from hc.api.models import (
@@ -352,11 +354,19 @@ def switch_channel(
     if channel.project_id != check.project_id:
         return HttpResponseBadRequest()
 
-    if request.POST.get("state") == "on":
+    enabled = request.POST.get("state") == "on"
+    if enabled:
         channel.checks.add(check)
     else:
         channel.checks.remove(check)
 
+    assert posthog.posthog_client is not None
+    with new_context():
+        identify_context(str(request.user.id))
+        posthog.posthog_client.capture(
+            "channel_assignment_updated",
+            properties={"channel_kind": channel.kind, "enabled": enabled},
+        )
     return HttpResponse()
 
 
@@ -549,6 +559,12 @@ def add_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.save()
 
     check.assign_all_channels()
+    assert posthog.posthog_client is not None
+    with new_context():
+        identify_context(str(request.user.id))
+        posthog.posthog_client.capture(
+            "check_created", properties={"check_kind": check.kind}
+        )
 
     url = reverse("hc-checks", args=[project.code])
     url += _get_referer_qs(request)  # Preserve selected tags and search
@@ -567,6 +583,12 @@ def update_name(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
         check.tags = form.cleaned_data["tags"]
         check.desc = form.cleaned_data["desc"]
         check.save()
+        assert posthog.posthog_client is not None
+        with new_context():
+            identify_context(str(request.user.id))
+            posthog.posthog_client.capture(
+                "check_updated", properties={"update_type": "metadata"}
+            )
 
     if "/details/" in request.headers.get("Referer", ""):
         return redirect("hc-details", code)
@@ -660,6 +682,12 @@ def update_timeout(request: AuthenticatedHttpRequest, code: UUID) -> HttpRespons
     if not check_saved:
         check.save()
 
+    assert posthog.posthog_client is not None
+    with new_context():
+        identify_context(str(request.user.id))
+        posthog.posthog_client.capture(
+            "check_updated", properties={"update_type": "schedule"}
+        )
     if "/details/" in request.headers.get("Referer", ""):
         return redirect("hc-details", code)
 
@@ -836,6 +864,10 @@ def pause(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     # and Profile.next_nag_date needs to be cleared out:
     check.project.update_next_nag_dates()
 
+    assert posthog.posthog_client is not None
+    with new_context():
+        identify_context(str(request.user.id))
+        posthog.posthog_client.capture("check_paused")
     # Don't redirect after an AJAX request:
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return HttpResponse()
@@ -858,6 +890,10 @@ def resume(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.alert_after = None
     check.save()
 
+    assert posthog.posthog_client is not None
+    with new_context():
+        identify_context(str(request.user.id))
+        posthog.posthog_client.capture("check_resumed")
     return redirect("hc-details", code)
 
 
@@ -868,6 +904,10 @@ def remove_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     project = check.project
     check.rename_and_delete()
+    assert posthog.posthog_client is not None
+    with new_context():
+        identify_context(str(request.user.id))
+        posthog.posthog_client.capture("check_deleted")
     return redirect("hc-checks", project.code)
 
 
@@ -1100,6 +1140,12 @@ def copy(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     copied.channel_set.add(*check.channel_set.all())
 
+    assert posthog.posthog_client is not None
+    with new_context():
+        identify_context(str(request.user.id))
+        posthog.posthog_client.capture(
+            "check_copied", properties={"check_kind": copied.kind}
+        )
     url = reverse("hc-details", args=[copied.code], query={"copied": 1})
     return redirect(url)
 
@@ -1318,6 +1364,12 @@ def send_test_notification(
     if error:
         messages.warning(request, f"Could not send a test notification. {error}.")
     else:
+        assert posthog.posthog_client is not None
+        with new_context():
+            identify_context(str(request.user.id))
+            posthog.posthog_client.capture(
+                "test_notification_sent", properties={"channel_kind": channel.kind}
+            )
         messages.success(request, "Test notification sent!")
 
     return redirect("hc-channels", channel.project.code)
