@@ -16,6 +16,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from cronsim import CronSim
+from django.apps import apps
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -550,6 +551,11 @@ def add_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     check.assign_all_channels()
 
+    posthog_client = apps.get_app_config("api").posthog_client
+    with posthog_client.new_context():
+        posthog_client.identify_context(str(request.user.id))
+        posthog_client.capture("check_created", properties={"kind": check.kind})
+
     url = reverse("hc-checks", args=[project.code])
     url += _get_referer_qs(request)  # Preserve selected tags and search
     return redirect(url)
@@ -836,6 +842,11 @@ def pause(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     # and Profile.next_nag_date needs to be cleared out:
     check.project.update_next_nag_dates()
 
+    posthog_client = apps.get_app_config("api").posthog_client
+    with posthog_client.new_context():
+        posthog_client.identify_context(str(request.user.id))
+        posthog_client.capture("check_paused")
+
     # Don't redirect after an AJAX request:
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return HttpResponse()
@@ -857,6 +868,11 @@ def resume(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.last_ping = None
     check.alert_after = None
     check.save()
+
+    posthog_client = apps.get_app_config("api").posthog_client
+    with posthog_client.new_context():
+        posthog_client.identify_context(str(request.user.id))
+        posthog_client.capture("check_resumed")
 
     return redirect("hc-details", code)
 
@@ -1318,6 +1334,12 @@ def send_test_notification(
     if error:
         messages.warning(request, f"Could not send a test notification. {error}.")
     else:
+        posthog_client = apps.get_app_config("api").posthog_client
+        with posthog_client.new_context():
+            posthog_client.identify_context(str(request.user.id))
+            posthog_client.capture(
+                "test_notification_sent", properties={"channel_kind": channel.kind}
+            )
         messages.success(request, "Test notification sent!")
 
     return redirect("hc-channels", channel.project.code)

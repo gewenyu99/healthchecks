@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import pyotp
 import segno
+from django.apps import apps
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import authenticate, update_session_auth_hash
@@ -142,6 +143,10 @@ def _check_2fa(request: HttpRequest, user: User) -> HttpResponse:
         return redirect(path)
 
     auth_login(request, user)
+    posthog_client = apps.get_app_config("api").posthog_client
+    with posthog_client.new_context():
+        posthog_client.identify_context(str(user.pk))
+        posthog_client.set(distinct_id=str(user.pk), properties={"email": user.email})
     return _redirect_after_login(request)
 
 
@@ -234,6 +239,13 @@ def signup(request: HttpRequest) -> HttpResponse:
             # If the user does not exist, create a new user account.
             tz = form.cleaned_data["tz"]
             user = _make_user(email, tz)
+            posthog_client = apps.get_app_config("api").posthog_client
+            with posthog_client.new_context():
+                posthog_client.identify_context(str(user.pk))
+                posthog_client.set(
+                    distinct_id=str(user.pk), properties={"email": user.email}
+                )
+                posthog_client.capture("account_created")
 
         profile = Profile.objects.for_user(user)
         profile.send_instant_login_link()
@@ -355,6 +367,11 @@ def add_project(request: AuthenticatedHttpRequest) -> HttpResponse:
     project.name = form.cleaned_data["name"]
     project.save()
 
+    posthog_client = apps.get_app_config("api").posthog_client
+    with posthog_client.new_context():
+        posthog_client.identify_context(str(request.user.id))
+        posthog_client.capture("project_created")
+
     return redirect("hc-checks", project.code)
 
 
@@ -394,6 +411,14 @@ def project(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
                 ctx["new_ping_key"] = project.set_ping_key()
             project.save()
 
+            posthog_client = apps.get_app_config("api").posthog_client
+            with posthog_client.new_context():
+                posthog_client.identify_context(str(request.user.id))
+                posthog_client.capture(
+                    "project_key_created",
+                    properties={"key_type": request.POST["create_key"]},
+                )
+
             ctx["key_created"] = True
             ctx["api_status"] = "success"
         elif "revoke_key" in request.POST:
@@ -430,6 +455,14 @@ def project(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
                     user = _make_user(email, with_project=False)
 
                 if project.invite(user, role=invite_form.cleaned_data["role"]):
+                    posthog_client = apps.get_app_config("api").posthog_client
+                    with posthog_client.new_context():
+                        posthog_client.identify_context(str(request.user.id))
+                        posthog_client.capture(
+                            "team_member_invited",
+                            properties={"role": invite_form.cleaned_data["role"]},
+                        )
+
                     ctx["team_member_invited"] = email
                     ctx["team_status"] = "success"
                 else:
@@ -466,6 +499,11 @@ def project(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
                 project.name = name_form.cleaned_data["name"]
                 project.save()
 
+                posthog_client = apps.get_app_config("api").posthog_client
+                with posthog_client.new_context():
+                    posthog_client.identify_context(str(request.user.id))
+                    posthog_client.capture("project_name_updated")
+
                 ctx["project_name_updated"] = True
                 ctx["project_name_status"] = "success"
 
@@ -492,6 +530,11 @@ def project(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
                 # Send an email notification
                 profile = Profile.objects.for_user(membership.user)
                 profile.send_transfer_request(project)
+
+                posthog_client = apps.get_app_config("api").posthog_client
+                with posthog_client.new_context():
+                    posthog_client.identify_context(str(request.user.id))
+                    posthog_client.capture("project_transfer_initiated")
 
                 ctx["transfer_initiated"] = True
                 ctx["transfer_status"] = "success"
@@ -524,6 +567,11 @@ def project(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
                 # 2. Change project's owner
                 project.owner = request.user
                 project.save()
+
+            posthog_client = apps.get_app_config("api").posthog_client
+            with posthog_client.new_context():
+                posthog_client.identify_context(str(request.user.id))
+                posthog_client.capture("project_ownership_transferred")
 
             ctx["is_owner"] = True
             ctx["is_manager"] = True
@@ -591,6 +639,11 @@ def set_password(request: AuthenticatedHttpRequest) -> HttpResponse:
             # update the session with the new password hash so that
             # the user doesn't  get logged out
             update_session_auth_hash(request, request.user)
+
+            posthog_client = apps.get_app_config("api").posthog_client
+            with posthog_client.new_context():
+                posthog_client.identify_context(str(request.user.id))
+                posthog_client.capture("password_changed")
 
             request.session["changed_password"] = True
             return redirect("hc-profile")
@@ -692,6 +745,10 @@ def close(request: AuthenticatedHttpRequest) -> HttpResponse:
                 sub.cancel()
 
             # Deleting user also deletes its profile, checks, channels etc.
+            posthog_client = apps.get_app_config("api").posthog_client
+            with posthog_client.new_context():
+                posthog_client.identify_context(str(user.id))
+                posthog_client.capture("account_closed")
             user.delete()
 
             request.session.flush()
@@ -770,6 +827,11 @@ def add_totp(request: AuthenticatedHttpRequest) -> HttpResponse:
             request.profile.totp_created = now()
             request.profile.save()
 
+            posthog_client = apps.get_app_config("api").posthog_client
+            with posthog_client.new_context():
+                posthog_client.identify_context(str(request.user.id))
+                posthog_client.capture("two_factor_enabled", properties={"method": "totp"})
+
             request.session["enabled_totp"] = True
             request.session.pop("totp_secret")
             return redirect("hc-profile")
@@ -793,6 +855,12 @@ def remove_totp(request: AuthenticatedHttpRequest) -> HttpResponse:
         request.profile.totp = None
         request.profile.totp_created = None
         request.profile.save()
+
+        posthog_client = apps.get_app_config("api").posthog_client
+        with posthog_client.new_context():
+            posthog_client.identify_context(str(request.user.id))
+            posthog_client.capture("two_factor_disabled", properties={"method": "totp"})
+
         request.session["disabled_totp"] = True
         return redirect("hc-profile")
 
@@ -862,6 +930,10 @@ def login_webauthn(request: HttpRequest) -> HttpResponse:
         request.session.pop("state")
         request.session.pop("2fa_user")
         auth_login(request, user, "hc.accounts.backends.EmailBackend")
+        posthog_client = apps.get_app_config("api").posthog_client
+        with posthog_client.new_context():
+            posthog_client.identify_context(str(user.pk))
+            posthog_client.set(distinct_id=str(user.pk), properties={"email": user.email})
         return _redirect_after_login(request)
 
     options, request.session["state"] = helper.prepare()
@@ -916,6 +988,10 @@ def login_totp(request: HttpRequest) -> HttpResponse:
 
             request.session.pop("2fa_user")
             auth_login(request, user, "hc.accounts.backends.EmailBackend")
+            posthog_client = apps.get_app_config("api").posthog_client
+            with posthog_client.new_context():
+                posthog_client.identify_context(str(user.pk))
+                posthog_client.set(distinct_id=str(user.pk), properties={"email": user.email})
             return _redirect_after_login(request)
     else:
         form = forms.TotpForm(totp)
