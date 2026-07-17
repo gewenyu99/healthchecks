@@ -738,17 +738,10 @@ class Ping(models.Model):
         return result
 
     def has_body(self) -> bool:
-        # Non-zero object size tells us there should be ping body in object store
-        if self.object_size:
+        if self.body_raw or self.object_size:
             return True
 
-        # If the ping instance has "body_raw_length" attribute,
-        # use that instead of body_raw itself. This enables a defer("body_raw")
-        # optimization in the "Get Pings" API call.
-        if hasattr(self, "body_raw_length"):
-            return True if getattr(self, "body_raw_length") else False
-
-        return True if self.body_raw else False
+        return False
 
     def get_body_bytes(self) -> bytes | None:
         if self.object_size and self.n:

@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import pyotp
 import segno
+from django.apps import apps
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import authenticate, update_session_auth_hash
@@ -36,7 +37,6 @@ from hc.accounts import forms
 from hc.accounts.decorators import require_sudo_mode
 from hc.accounts.http import AuthenticatedHttpRequest
 from hc.accounts.models import Credential, Member, Profile, Project
-from hc.api.apps import get_posthog_client
 from hc.api.models import Channel, Check, TokenBucket
 from hc.lib.tz import all_timezones
 from hc.lib.webauthn import CreateHelper, GetHelper
@@ -123,21 +123,6 @@ def _redirect_after_login(request: HttpRequest) -> HttpResponse:
     return redirect("hc-index")
 
 
-def _identify_posthog_user(user: User, login_method: str) -> None:
-    """Set person properties and capture a successful authentication transition."""
-    client = get_posthog_client()
-    client.set(
-        distinct_id=str(user.pk),
-        properties={
-            "email": user.email,
-            "username": user.username,
-        },
-    )
-    with client.new_context():
-        client.identify_context(str(user.pk))
-        client.capture("user_logged_in", properties={"login_method": login_method})
-
-
 def _check_2fa(request: HttpRequest, user: User) -> HttpResponse:
     have_keys = user.credentials.exists()
     profile = Profile.objects.for_user(user)
@@ -158,7 +143,6 @@ def _check_2fa(request: HttpRequest, user: User) -> HttpResponse:
         return redirect(path)
 
     auth_login(request, user)
-    _identify_posthog_user(user, "password")
     return _redirect_after_login(request)
 
 
@@ -371,8 +355,8 @@ def add_project(request: AuthenticatedHttpRequest) -> HttpResponse:
     project.code = project.badge_key = str(uuid4())
     project.name = form.cleaned_data["name"]
     project.save()
-    get_posthog_client().capture("project_created")
 
+    apps.get_app_config("api").posthog_client.capture("project_created")
     return redirect("hc-checks", project.code)
 
 
@@ -448,9 +432,9 @@ def project(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
                     user = _make_user(email, with_project=False)
 
                 if project.invite(user, role=invite_form.cleaned_data["role"]):
-                    get_posthog_client().capture(
-                        "team_member_invited",
-                        properties={"member_role": invite_form.cleaned_data["role"]},
+                    apps.get_app_config("api").posthog_client.capture(
+                        "project_member_invited",
+                        properties={"role": invite_form.cleaned_data["role"]},
                     )
                     ctx["team_member_invited"] = email
                     ctx["team_status"] = "success"
@@ -476,8 +460,10 @@ def project(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
                     return HttpResponseBadRequest()
 
                 Member.objects.filter(project=project, user=farewell_user).delete()
-                get_posthog_client().capture("team_member_removed")
 
+                apps.get_app_config("api").posthog_client.capture(
+                    "project_member_removed"
+                )
                 ctx["team_member_removed"] = remove_form.cleaned_data["email"]
                 ctx["team_status"] = "info"
         elif "set_project_name" in request.POST:
@@ -515,8 +501,10 @@ def project(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
                 # Send an email notification
                 profile = Profile.objects.for_user(membership.user)
                 profile.send_transfer_request(project)
-                get_posthog_client().capture("project_transfer_initiated")
 
+                apps.get_app_config("api").posthog_client.capture(
+                    "project_transfer_initiated"
+                )
                 ctx["transfer_initiated"] = True
                 ctx["transfer_status"] = "success"
 
@@ -549,7 +537,9 @@ def project(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
                 project.owner = request.user
                 project.save()
 
-            get_posthog_client().capture("project_transfer_accepted")
+            apps.get_app_config("api").posthog_client.capture(
+                "project_transfer_accepted"
+            )
             ctx["is_owner"] = True
             ctx["is_manager"] = True
             messages.success(request, "You are now the owner of this project!")
@@ -618,6 +608,7 @@ def set_password(request: AuthenticatedHttpRequest) -> HttpResponse:
             update_session_auth_hash(request, request.user)
 
             request.session["changed_password"] = True
+            apps.get_app_config("api").posthog_client.capture("password_changed")
             return redirect("hc-profile")
 
     return render(request, "accounts/set_password.html", {})
@@ -734,13 +725,9 @@ def close(request: AuthenticatedHttpRequest) -> HttpResponse:
 @login_required
 def remove_project(request: AuthenticatedHttpRequest, code: str) -> HttpResponse:
     project = get_object_or_404(Project, code=code, owner=request.user)
-    check_count = project.check_set.count()
     for check in project.check_set.all():
         check.rename_and_delete()
     project.delete()
-    get_posthog_client().capture(
-        "project_deleted", properties={"check_count": check_count}
-    )
     return redirect("hc-index")
 
 
@@ -801,6 +788,7 @@ def add_totp(request: AuthenticatedHttpRequest) -> HttpResponse:
 
             request.session["enabled_totp"] = True
             request.session.pop("totp_secret")
+            apps.get_app_config("api").posthog_client.capture("two_factor_enabled")
             return redirect("hc-profile")
     else:
         form = forms.TotpForm(totp)
@@ -891,7 +879,6 @@ def login_webauthn(request: HttpRequest) -> HttpResponse:
         request.session.pop("state")
         request.session.pop("2fa_user")
         auth_login(request, user, "hc.accounts.backends.EmailBackend")
-        _identify_posthog_user(user, "webauthn")
         return _redirect_after_login(request)
 
     options, request.session["state"] = helper.prepare()
@@ -946,7 +933,6 @@ def login_totp(request: HttpRequest) -> HttpResponse:
 
             request.session.pop("2fa_user")
             auth_login(request, user, "hc.accounts.backends.EmailBackend")
-            _identify_posthog_user(user, "totp")
             return _redirect_after_login(request)
     else:
         form = forms.TotpForm(totp)

@@ -1,39 +1,47 @@
 from __future__ import annotations
 
 import atexit
-
 from collections.abc import Sequence
 from typing import Any
 from urllib.parse import urlsplit
 
-from django.apps import AppConfig
+from django.apps import AppConfig, apps
 from django.conf import settings
+from django.contrib.auth.signals import user_logged_in
 from django.core.checks import Error, Warning, register
+from django.dispatch import receiver
 from django.http.request import split_domain_port, validate_host
-from posthog import Posthog
+from posthog import identify_context
 
 
-posthog_client: Posthog | None = None
+@receiver(user_logged_in)
+def identify_posthog_user(sender: Any, request: Any, user: Any, **kwargs: Any) -> None:
+    """Identify the active context after Django authenticates a user."""
+    distinct_id = str(user.pk)
+    identify_context(distinct_id)
 
-
-def get_posthog_client() -> Posthog:
-    if posthog_client is None:
-        raise RuntimeError("PostHog has not been initialized")
-    return posthog_client
+    posthog_client = apps.get_app_config("api").posthog_client
+    posthog_client.set(
+        distinct_id=distinct_id,
+        properties={
+            "email": user.email,
+            "is_staff": user.is_staff,
+        },
+    )
 
 
 class ApiConfig(AppConfig):
     name = "hc.api"
 
     def ready(self) -> None:
-        global posthog_client
+        from posthog import Posthog
 
-        posthog_client = Posthog(
-            settings.POSTHOG_PROJECT_TOKEN,
+        self.posthog_client = Posthog(
+            project_api_key=settings.POSTHOG_PROJECT_TOKEN,
             host=settings.POSTHOG_HOST,
             enable_exception_autocapture=True,
         )
-        atexit.register(posthog_client.shutdown)
+        atexit.register(self.posthog_client.shutdown)
 
 
 @register()  # W001, W002, W005, E002, E003
