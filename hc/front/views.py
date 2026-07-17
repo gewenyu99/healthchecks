@@ -63,6 +63,7 @@ from hc.lib.badges import get_badge_url
 from hc.lib.string import is_valid_uuid_string
 from hc.lib.tz import all_timezones
 from hc.lib.urls import absolute_reverse
+from hc.posthog_client import client
 
 logger = logging.getLogger(__name__)
 
@@ -549,6 +550,7 @@ def add_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.save()
 
     check.assign_all_channels()
+    client.capture("check_created", properties={"check_kind": check.kind})
 
     url = reverse("hc-checks", args=[project.code])
     url += _get_referer_qs(request)  # Preserve selected tags and search
@@ -835,6 +837,7 @@ def pause(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     # After pausing a check we must check if all checks are up,
     # and Profile.next_nag_date needs to be cleared out:
     check.project.update_next_nag_dates()
+    client.capture("check_paused", properties={"check_kind": check.kind})
 
     # Don't redirect after an AJAX request:
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
@@ -858,6 +861,7 @@ def resume(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.alert_after = None
     check.save()
 
+    client.capture("check_resumed", properties={"check_kind": check.kind})
     return redirect("hc-details", code)
 
 
@@ -867,6 +871,7 @@ def remove_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check = _get_rw_check_for_user(request, code)
 
     project = check.project
+    client.capture("check_deleted", properties={"check_kind": check.kind})
     check.rename_and_delete()
     return redirect("hc-checks", project.code)
 
@@ -1318,6 +1323,10 @@ def send_test_notification(
     if error:
         messages.warning(request, f"Could not send a test notification. {error}.")
     else:
+        client.capture(
+            "test_notification_sent",
+            properties={"channel_kind": channel.kind},
+        )
         messages.success(request, "Test notification sent!")
 
     return redirect("hc-channels", channel.project.code)
@@ -1328,6 +1337,10 @@ def send_test_notification(
 def remove_channel(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     channel = _get_rw_channel_for_user(request, code)
     project = channel.project
+    client.capture(
+        "notification_channel_deleted",
+        properties={"channel_kind": channel.kind},
+    )
     channel.delete()
 
     return redirect("hc-channels", project.code)

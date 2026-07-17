@@ -8,6 +8,7 @@ from django.core.exceptions import MiddlewareNotUsed
 from django.http import HttpRequest, HttpResponse
 
 from hc.accounts.models import Profile
+from hc.posthog_client import client
 
 MiddlewareFunc = Callable[[HttpRequest], HttpResponse]
 
@@ -77,5 +78,15 @@ class CustomHeaderMiddleware:
             # by logging the user in.
             request.user = user
             auth.login(request, user)
+            with client.new_context():
+                client.identify_context(str(user.pk))
+                client.set(
+                    distinct_id=str(user.pk),
+                    properties={"email": user.email},
+                )
+                client.capture(
+                    "user_logged_in",
+                    properties={"login_method": "remote_header"},
+                )
 
         return self.get_response(request)
