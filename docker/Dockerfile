@@ -1,10 +1,10 @@
-FROM python:3.14.4-slim-trixie AS builder
+FROM python:3.14.6-slim-trixie AS builder
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 COPY requirements.txt /tmp
 # build-essential is required to build uswsi, psycopg, mysqlclient
-# libffi-dev is required to build cffi (a dependency of minio)
+# libffi-dev is required to build cffi (a dependency of minio and cryptography)
 # libpq-dev is required to build psycopg[c]
 # libmaria-dev is required to build mysqlclient
 # libcurl4-openssl-dev is required to build pycurl
@@ -19,7 +19,7 @@ RUN \
     rm -rf /opt/healthchecks/.git && \
     rm -rf /opt/healthchecks/stuff
 
-FROM python:3.14.4-slim-trixie
+FROM python:3.14.6-slim-trixie
 
 RUN useradd --system hc
 ENV PYTHONUNBUFFERED=1

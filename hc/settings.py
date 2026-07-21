@@ -66,8 +66,8 @@ def envsecret(s: str, default: str | None = None) -> str | None:
 
 SECRET_KEY = envsecret("SECRET_KEY", "---")
 METRICS_KEY = os.getenv("METRICS_KEY")
-POSTHOG_PROJECT_TOKEN = os.environ["POSTHOG_PROJECT_TOKEN"]
-POSTHOG_HOST = os.environ["POSTHOG_HOST"]
+POSTHOG_PROJECT_TOKEN = os.getenv("POSTHOG_PROJECT_TOKEN")
+POSTHOG_HOST = os.getenv("POSTHOG_HOST")
 DEBUG = envbool("DEBUG", "True")
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "healthchecks@example.org")
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL")
@@ -99,7 +99,7 @@ INSTALLED_APPS = (
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "compressor",
-    "hc.api.apps.ApiConfig",
+    "hc.api",
     "hc.front",
     "hc.logs",
     "hc.payments",

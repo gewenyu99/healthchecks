@@ -16,7 +16,6 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from cronsim import CronSim
-from django.apps import apps
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -40,6 +39,7 @@ from django.views.decorators.http import require_POST
 from django_stubs_ext import WithAnnotations
 from oncalendar import OnCalendar, OnCalendarError
 
+from hc import posthog
 from hc.accounts.http import AuthenticatedHttpRequest
 from hc.accounts.models import Member, Profile, Project
 from hc.api.models import (
@@ -550,9 +550,9 @@ def add_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.save()
 
     check.assign_all_channels()
-    apps.get_app_config("api").posthog_client.capture(
-        "check_created", properties={"check_kind": check.kind}
-    )
+
+    if posthog.client:
+        posthog.client.capture("check_created", properties={"kind": check.kind})
 
     url = reverse("hc-checks", args=[project.code])
     url += _get_referer_qs(request)  # Preserve selected tags and search
@@ -839,7 +839,9 @@ def pause(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     # After pausing a check we must check if all checks are up,
     # and Profile.next_nag_date needs to be cleared out:
     check.project.update_next_nag_dates()
-    apps.get_app_config("api").posthog_client.capture("check_paused")
+
+    if posthog.client:
+        posthog.client.capture("check_paused")
 
     # Don't redirect after an AJAX request:
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
@@ -863,7 +865,9 @@ def resume(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.alert_after = None
     check.save()
 
-    apps.get_app_config("api").posthog_client.capture("check_resumed")
+    if posthog.client:
+        posthog.client.capture("check_resumed")
+
     return redirect("hc-details", code)
 
 
@@ -874,7 +878,8 @@ def remove_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     project = check.project
     check.rename_and_delete()
-    apps.get_app_config("api").posthog_client.capture("check_deleted")
+    if posthog.client:
+        posthog.client.capture("check_deleted")
     return redirect("hc-checks", project.code)
 
 
@@ -1060,7 +1065,6 @@ def transfer(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
         check.save()
         check.assign_all_channels()
 
-        apps.get_app_config("api").posthog_client.capture("check_transferred")
         messages.success(request, "Check transferred successfully!")
         return redirect("hc-details", code)
 
@@ -1108,9 +1112,9 @@ def copy(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     copied.channel_set.add(*check.channel_set.all())
 
-    apps.get_app_config("api").posthog_client.capture(
-        "check_copied", properties={"check_kind": copied.kind}
-    )
+    if posthog.client:
+        posthog.client.capture("check_copied", properties={"kind": copied.kind})
+
     url = reverse("hc-details", args=[copied.code], query={"copied": 1})
     return redirect(url)
 
@@ -1329,9 +1333,8 @@ def send_test_notification(
     if error:
         messages.warning(request, f"Could not send a test notification. {error}.")
     else:
-        apps.get_app_config("api").posthog_client.capture(
-            "test_notification_sent", properties={"channel_kind": channel.kind}
-        )
+        if posthog.client:
+            posthog.client.capture("test_notification_sent")
         messages.success(request, "Test notification sent!")
 
     return redirect("hc-channels", channel.project.code)
@@ -1344,9 +1347,6 @@ def remove_channel(request: AuthenticatedHttpRequest, code: UUID) -> HttpRespons
     project = channel.project
     channel.delete()
 
-    apps.get_app_config("api").posthog_client.capture(
-        "notification_channel_removed", properties={"channel_kind": channel.kind}
-    )
     return redirect("hc-channels", project.code)
 
 
