@@ -6,6 +6,7 @@ django-stubs-ext==6.0.7
 fido2==2.2.1
 oncalendar==1.1
 psycopg==3.3.4
+posthog==7.9.7
 pycurl==7.47.0
 pydantic==2.13.4
 PyJWT[crypto]==2.13.0

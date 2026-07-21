@@ -32,6 +32,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.debug import sensitive_post_parameters
 from django.views.decorators.http import require_POST
 
+from hc import posthog
 from hc.accounts import forms
 from hc.accounts.decorators import require_sudo_mode
 from hc.accounts.http import AuthenticatedHttpRequest
@@ -203,6 +204,9 @@ def login(request: HttpRequest) -> HttpResponse:
 
 @require_POST
 def logout(request: HttpRequest) -> HttpResponse:
+    if request.user.is_authenticated and posthog.client:
+        posthog.client.capture("user_logged_out")
+
     auth_logout(request)
     return redirect("hc-index")
 
@@ -237,6 +241,8 @@ def signup(request: HttpRequest) -> HttpResponse:
 
         profile = Profile.objects.for_user(user)
         profile.send_instant_login_link()
+        if posthog.client:
+            posthog.client.capture("signup_requested")
     else:
         ctx = {"form": form}
 
@@ -355,6 +361,9 @@ def add_project(request: AuthenticatedHttpRequest) -> HttpResponse:
     project.name = form.cleaned_data["name"]
     project.save()
 
+    if posthog.client:
+        posthog.client.capture("project_created")
+
     return redirect("hc-checks", project.code)
 
 
@@ -430,6 +439,11 @@ def project(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
                     user = _make_user(email, with_project=False)
 
                 if project.invite(user, role=invite_form.cleaned_data["role"]):
+                    if posthog.client:
+                        posthog.client.capture(
+                            "team_member_invited",
+                            properties={"role": invite_form.cleaned_data["role"]},
+                        )
                     ctx["team_member_invited"] = email
                     ctx["team_status"] = "success"
                 else:
@@ -525,6 +539,9 @@ def project(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
                 project.owner = request.user
                 project.save()
 
+            if posthog.client:
+                posthog.client.capture("project_transfer_accepted")
+
             ctx["is_owner"] = True
             ctx["is_manager"] = True
             messages.success(request, "You are now the owner of this project!")
@@ -593,6 +610,8 @@ def set_password(request: AuthenticatedHttpRequest) -> HttpResponse:
             update_session_auth_hash(request, request.user)
 
             request.session["changed_password"] = True
+            if posthog.client:
+                posthog.client.capture("password_changed")
             return redirect("hc-profile")
 
     return render(request, "accounts/set_password.html", {})
@@ -691,6 +710,9 @@ def close(request: AuthenticatedHttpRequest) -> HttpResponse:
             if sub := Subscription.objects.filter(user=user).first():
                 sub.cancel()
 
+            if posthog.client:
+                posthog.client.capture("account_closed")
+
             # Deleting user also deletes its profile, checks, channels etc.
             user.delete()
 
@@ -772,6 +794,8 @@ def add_totp(request: AuthenticatedHttpRequest) -> HttpResponse:
 
             request.session["enabled_totp"] = True
             request.session.pop("totp_secret")
+            if posthog.client:
+                posthog.client.capture("two_factor_enabled", properties={"method": "totp"})
             return redirect("hc-profile")
     else:
         form = forms.TotpForm(totp)

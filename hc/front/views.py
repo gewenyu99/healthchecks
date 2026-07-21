@@ -39,6 +39,7 @@ from django.views.decorators.http import require_POST
 from django_stubs_ext import WithAnnotations
 from oncalendar import OnCalendar, OnCalendarError
 
+from hc import posthog
 from hc.accounts.http import AuthenticatedHttpRequest
 from hc.accounts.models import Member, Profile, Project
 from hc.api.models import (
@@ -550,6 +551,9 @@ def add_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     check.assign_all_channels()
 
+    if posthog.client:
+        posthog.client.capture("check_created", properties={"kind": check.kind})
+
     url = reverse("hc-checks", args=[project.code])
     url += _get_referer_qs(request)  # Preserve selected tags and search
     return redirect(url)
@@ -836,6 +840,9 @@ def pause(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     # and Profile.next_nag_date needs to be cleared out:
     check.project.update_next_nag_dates()
 
+    if posthog.client:
+        posthog.client.capture("check_paused")
+
     # Don't redirect after an AJAX request:
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return HttpResponse()
@@ -858,6 +865,9 @@ def resume(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
     check.alert_after = None
     check.save()
 
+    if posthog.client:
+        posthog.client.capture("check_resumed")
+
     return redirect("hc-details", code)
 
 
@@ -868,6 +878,8 @@ def remove_check(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     project = check.project
     check.rename_and_delete()
+    if posthog.client:
+        posthog.client.capture("check_deleted")
     return redirect("hc-checks", project.code)
 
 
@@ -1100,6 +1112,9 @@ def copy(request: AuthenticatedHttpRequest, code: UUID) -> HttpResponse:
 
     copied.channel_set.add(*check.channel_set.all())
 
+    if posthog.client:
+        posthog.client.capture("check_copied", properties={"kind": copied.kind})
+
     url = reverse("hc-details", args=[copied.code], query={"copied": 1})
     return redirect(url)
 
@@ -1318,6 +1333,8 @@ def send_test_notification(
     if error:
         messages.warning(request, f"Could not send a test notification. {error}.")
     else:
+        if posthog.client:
+            posthog.client.capture("test_notification_sent")
         messages.success(request, "Test notification sent!")
 
     return redirect("hc-channels", channel.project.code)
