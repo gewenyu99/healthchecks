@@ -10,8 +10,60 @@ from django.core.checks import Error, Warning, register
 from django.http.request import split_domain_port, validate_host
 
 
+class _NoopPosthog:
+    def capture(self, event: str, **kwargs: object) -> None:
+        pass
+
+
+posthog_client: Any = _NoopPosthog()
+
+
 class ApiConfig(AppConfig):
     name = "hc.api"
+
+    def ready(self) -> None:
+        import atexit
+
+        from posthog import Posthog
+
+        if not settings.POSTHOG_PROJECT_TOKEN or not settings.POSTHOG_HOST:
+            if settings.DEBUG:
+                missing = (
+                    "POSTHOG_PROJECT_TOKEN"
+                    if not settings.POSTHOG_PROJECT_TOKEN
+                    else "POSTHOG_HOST"
+                )
+                raise RuntimeError(
+                    f"{missing} variable required by PostHog is missing or un-configured, "
+                    f"this causes events to be silently missed. This error stops appearing "
+                    f"once {missing} is configured"
+                )
+            return
+
+        global posthog_client
+        posthog_client = Posthog(
+            project_api_key=settings.POSTHOG_PROJECT_TOKEN,
+            host=settings.POSTHOG_HOST,
+            enable_exception_autocapture=True,
+        )
+        atexit.register(posthog_client.shutdown)
+
+        # The middleware reads request.user before a login view authenticates it.
+        # Update the ambient request context once Django emits its login signal.
+        from django.contrib.auth.models import User
+        from django.contrib.auth.signals import user_logged_in
+        from django.http import HttpRequest
+
+        def identify_posthog_user(
+            sender: object, request: HttpRequest, user: User, **kwargs: object
+        ) -> None:
+            posthog_client.identify_context(str(user.pk))
+
+        user_logged_in.connect(
+            identify_posthog_user,
+            weak=False,
+            dispatch_uid="hc.api.identify_posthog_user",
+        )
 
 
 @register()  # W001, W002, W005, E002, E003
